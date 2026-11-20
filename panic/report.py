@@ -56,17 +56,20 @@ def _lines(items: list[dict], link: bool = False) -> list[str]:
     return out
 
 
-def _watch_findings(events, since: float) -> list[dict]:
+def _watch_findings(events, since: float, kinds=WATCH_FINDINGS) -> list[dict]:
     """What the watch saw after the press, one entry per (account, action, event) with a count."""
     seen: dict[tuple, dict] = {}
     for e in events:
         at = e.get("at")
-        if e.get("event") not in WATCH_FINDINGS or not isinstance(at, (int, float)) or at <= since:
+        if e.get("event") not in kinds or not isinstance(at, (int, float)) or at <= since:
             continue
         key = (str(e.get("account")), str(e.get("action")), e["event"])
-        f = seen.setdefault(key, {"account": key[0], "action": key[1], "event": key[2], "count": 0, "last": at})
+        f = seen.setdefault(key, {"account": key[0], "action": key[1], "event": key[2], "count": 0, "last": at,
+                                  "removed": []})
         f["count"] += 1
         f["last"] = max(f["last"], at)
+        items = e.get("removed")
+        f["removed"] += [str(i) for i in items if str(i) not in f["removed"]] if isinstance(items, list) else []
     return list(seen.values())
 
 
@@ -81,6 +84,8 @@ def render(outcome: Outcome, now: float, watch_events=()) -> tuple[str, dict]:
         if r.status == Status.LOCKED and r.step.lingers_s > 0 and r.at + r.step.lingers_s > now
     ]
     watch = _watch_findings(watch_events, outcome.started_at)
+    put_back = _watch_findings(watch_events, outcome.started_at, ("reapplied",))
+    titles = {(r.step.account, r.step.action): r.step.title for r in rs}
     targets = list(dict.fromkeys(r.step.account for r in rs if r.step.account != "-"))
     freeze = _freeze_seconds(outcome)
     data = {
@@ -92,6 +97,7 @@ def render(outcome: Outcome, now: float, watch_events=()) -> tuple[str, dict]:
         "watch": watch,
         "touched": outcome.touched,
         "removed": outcome.removed,
+        "put_back": put_back,
         "freeze_seconds": freeze,
     }
 
@@ -115,6 +121,12 @@ def render(outcome: Outcome, now: float, watch_events=()) -> tuple[str, dict]:
     md += ["## Still open", "", *(open_lines or ["Nothing."]), ""]
     md += _per_account("Attacker may have touched", outcome.touched)
     md += _per_account("Removed by this press", outcome.removed)
+    md += ["## Put back during the watch", ""]
+    for p in put_back:
+        title = titles.get((p["account"], p["action"]))
+        md += [f"- {_code(p['account'])}: {_clean(title) if title else _code(p['action'])} "
+               f"put back {p['count']} times, last {_utc(p['last'])}", *(f"  - {_code(i)}" for i in p["removed"])]
+    md += [] if put_back else ["Nothing."]
     return "\n".join(md).rstrip("\n") + "\n", data
 
 

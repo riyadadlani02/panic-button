@@ -825,3 +825,20 @@ def test_watch_removals_still_logged_when_the_vault_cannot_be_written(armed, pat
     last = log.entries(log_path)[-1]
     assert last["event"] == "reapplied" and "disk full" in last["detail"] and "secret" not in json.dumps(last)
     assert last["removed"] == ["filters: 1 not in baseline (contents withheld)"]
+
+
+def test_report_lists_what_the_watch_put_back(armed, patch_watch, capsys):
+    fake.steps.append(Step("", "fwd", Phase.FREEZE, Tier.API, "Turn off forwarding", watch=WatchPolicy.REAPPLY))
+    cli("press", "--user", "mail")
+    results, live, accounts, baselines, _, logfn = patch_watch.call_args.args
+    fake.snapshot = lambda a: {} if fake.state["mail/fwd"] else {"forwarding": ["on -> thief@x"]}
+    for _ in range(2):  # the attacker turns it back on twice
+        fake.state["mail/fwd"] = False
+        executor.watch_once(results, live, accounts, baselines, set(), logfn)
+    capsys.readouterr()
+    assert cli("report") == 0
+    out = capsys.readouterr().out
+    assert out.index("## Removed by this press") < out.index("## Put back during the watch")
+    section = out.split("## Put back during the watch")[1]
+    assert "- `mail`: Turn off forwarding put back 2 times, last " in section
+    assert section.count("  - `forwarding: on -> thief@x`") == 1

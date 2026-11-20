@@ -38,7 +38,7 @@ def test_lingering_access_is_listed_as_open_until_it_expires():
 
 def test_no_safe_claim_and_empty_sections_say_nothing():
     md, _ = report.render(Outcome([], {"mail": ["unknown: could not read (x)"]}, 0.0), now=1.0)
-    assert "unknown" in md and "safe" not in md.lower() and md.count("Nothing.") == 4
+    assert "unknown" in md and "safe" not in md.lower() and md.count("Nothing.") == 5
 
 
 def test_freeze_time_is_measured():
@@ -84,7 +84,7 @@ def test_removed_section_follows_touched():
     assert md.index("## Attacker may have touched") < md.index("## Removed by this press") < md.index("apps: x")
     assert data["removed"] == {"mail": ["apps: x"], "bank": []}
     md, _ = report.render(Outcome([], {}, 0.0), now=1.0)
-    assert md.split("## Removed by this press")[1].strip() == "Nothing."
+    assert md.split("## Removed by this press")[1].split("## Put back during the watch")[0].strip() == "Nothing."
 
 
 def test_watch_findings_are_listed_under_still_open():
