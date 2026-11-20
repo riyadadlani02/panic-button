@@ -1,4 +1,4 @@
-"""Connector contract and plan compilation."""
+"""Connector contract, plan compilation, and the press that runs a plan and records evidence."""
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -9,6 +9,7 @@ from panic.model import Account, Edges, Evidence, Outcome, Phase, Result, Snapsh
 
 
 class Connector(Protocol):
+    # run and check are called concurrently from several threads and must be thread-safe.
     provider: str
 
     def catalog(self, account: Account) -> list[Step]: ...  # no network; order = guided presentation order
@@ -37,7 +38,7 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
     provider = {a.id: a.provider for a in accounts}
     touched: dict[str, list[str]] = {}
     for a in accounts:
-        if a.provider not in connectors:
+        if a.protected or a.provider not in connectors:  # break-glass is never touched, reads included
             continue
         try:
             touched[a.id] = outside_baseline(baselines.get(a.id, {}), connectors[a.provider].snapshot(a))
@@ -47,28 +48,46 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
     def done(step, status, evidence=None, detail=""):
         return Result(step, status, evidence, detail, now())
 
+    def readback(step: Step) -> bool | None:
+        ok = connectors[provider[step.account]].check(step, baselines.get(step.account, {}))
+        if ok is not None and not isinstance(ok, bool):
+            raise ValueError(f"unexpected check result {ok!r}")
+        return ok
+
     def api(step: Step) -> Result:  # never raises: one failure must not stop the rest
-        c, base = connectors[provider[step.account]], baselines.get(step.account, {})
         try:
-            c.run(step, base)
-            ok = c.check(step, base)
+            connectors[provider[step.account]].run(step, baselines.get(step.account, {}))
+            ok = readback(step)
         except Exception as e:
             return done(step, Status.STILL_OPEN, detail=str(e))
         if ok is False:
             return done(step, Status.STILL_OPEN, detail="provider accepted the call but the read-back still shows it open")
-        return done(step, Status.LOCKED, Evidence.VERIFIED if ok else Evidence.ACCEPTED)
+        return done(step, Status.LOCKED, Evidence.VERIFIED if ok is True else Evidence.ACCEPTED)
 
     if dry_run:
         results = [done(s, Status.STILL_OPEN, detail="dry run") for s in plan]
     else:
         finished: dict[Step, Result] = {}
+        interrupted = False
         with ThreadPoolExecutor(max_workers=16) as pool:
             for phase in (Phase.FREEZE, Phase.PURGE):
                 steps = [s for s in plan if s.tier is Tier.API and s.phase == phase]
-                finished.update(zip(steps, pool.map(api, steps)))
+                futures = [(s, pool.submit(api, s)) for s in steps]
+                try:
+                    for s, f in futures:
+                        finished[s] = f.result()
+                except KeyboardInterrupt:
+                    interrupted = True
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    break
+        for s in plan:
+            if s.tier is Tier.API and s not in finished:
+                finished[s] = done(s, Status.STILL_OPEN, detail="interrupted")
         guided = [s for s in plan if s.tier is Tier.GUIDED]
         for i, step in enumerate(guided):
             try:
+                if interrupted:
+                    raise KeyboardInterrupt
                 said_done = confirm(step)
             except (Exception, KeyboardInterrupt):
                 # Keep what is gathered if the owner bails out mid-walkthrough.
@@ -79,14 +98,14 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
                 finished[step] = done(step, Status.NEEDS_YOU)
                 continue
             try:
-                ok = connectors[provider[step.account]].check(step, baselines.get(step.account, {}))
+                ok = readback(step)
             except Exception as e:
                 finished[step] = done(step, Status.STILL_OPEN, detail=str(e))
                 continue
             if ok is False:
                 finished[step] = done(step, Status.NEEDS_YOU, detail="marked done but the read-back still shows it open")
             else:
-                finished[step] = done(step, Status.LOCKED, Evidence.VERIFIED if ok else Evidence.OWNER_CONFIRMED)
+                finished[step] = done(step, Status.LOCKED, Evidence.VERIFIED if ok is True else Evidence.OWNER_CONFIRMED)
         results = [finished[s] for s in plan]
 
         has_steps = {s.account for s in plan}
@@ -98,7 +117,12 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
                 results.append(done(Step(a.id, "reopenable", Phase.FREEZE, Tier.API, "Re-openable"),
                                     Status.STILL_OPEN, detail="re-openable from " + ", ".join(bad)))
 
-    for r in results:  # calling thread only: the log writer is not concurrency-safe
-        log({"account": r.step.account, "action": r.step.action, "phase": r.step.phase, "tier": r.step.tier,
-             "status": r.status, "evidence": r.evidence, "detail": r.detail})
+    for r in results[:]:  # calling thread only: the log writer is not concurrency-safe
+        try:
+            log({"account": r.step.account, "action": r.step.action, "phase": r.step.phase, "tier": r.step.tier,
+                 "status": r.status, "evidence": r.evidence, "detail": r.detail})
+        except Exception as e:  # results must survive a broken log
+            results.append(done(Step("-", "audit_log", Phase.PURGE, Tier.API, "Audit log"), Status.STILL_OPEN,
+                                detail=f"could not write the audit log: {e}"))
+            break
     return Outcome(results, touched, started)

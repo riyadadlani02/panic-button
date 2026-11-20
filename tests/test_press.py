@@ -81,3 +81,55 @@ def test_interrupted_walkthrough_keeps_results():
         g = by(out, acct, "guided")
         assert g.status is Status.NEEDS_YOU and g.detail == "not asked"
     assert by(out, "mail", "freeze").status is Status.LOCKED
+
+
+def test_log_failure_keeps_results_and_appends_audit_result():
+    n = []
+    def bad_log(e):
+        n.append(e)
+        if len(n) == 2: raise OSError("disk full")
+    c = mk()
+    out = press(compile_plan(A, E, {"fake": c}), A, E, {"fake": c}, {}, lambda s: True, bad_log)
+    assert len(n) == 2 and out.results[-1].step.action == "audit_log" and "disk full" in out.results[-1].detail
+    assert out.results[-1].status is Status.STILL_OPEN
+    assert all(r.status is Status.LOCKED for r in out.results[:-1]) and len(out.results) == 9
+
+def test_non_bool_check_result_is_not_verified():
+    c = mk(); c.check = lambda step, baseline: 1
+    r = by(run(c), "mail", "freeze")
+    assert r.status is Status.STILL_OPEN and "1" in r.detail
+
+def test_interrupt_while_waiting_on_api_steps():
+    # KeyboardInterrupt raised in a worker is re-raised by future.result() in the calling thread.
+    c = mk(); orig = c.run
+    def run_(step, baseline):
+        if step.account == "mail" and step.action == "freeze": raise KeyboardInterrupt
+        orig(step, baseline)
+    c.run = run_
+    out = run(c, confirm=lambda s: pytest.fail("asked after interrupt"))
+    assert by(out, "mail", "freeze").detail == "interrupted"
+    assert by(out, "mail", "freeze").status is Status.STILL_OPEN
+    for acct in ("mail", "bank"):
+        assert by(out, acct, "guided").status is Status.NEEDS_YOU and by(out, acct, "guided").detail == "not asked"
+        assert by(out, acct, "purge").status in (Status.STILL_OPEN, Status.LOCKED)
+    assert len(out.results) >= 8
+
+def test_protected_account_is_not_read_and_not_an_open_resetter():
+    c = mk(); reads = []; c.snapshot = lambda a: reads.append(a.id) or {}
+    accts = [Account("vault", "fake", protected=True), Account("bank", "fake")]
+    out = press(compile_plan(accts, [("vault", "bank")], {"fake": c}), accts, [("vault", "bank")], {"fake": c}, {}, lambda s: True, lambda e: None)
+    assert reads == ["bank"] and set(out.touched) == {"bank"}
+    assert not [r for r in out.results if r.step.action == "reopenable"]
+
+def test_check_that_raises_is_still_open_with_error_text():
+    c = mk()
+    def bad(step, baseline): raise RuntimeError("readback down")
+    c.check = bad
+    r = by(run(c), "mail", "freeze")
+    assert r.status is Status.STILL_OPEN and "readback down" in r.detail
+
+def test_snapshot_that_raises_is_unknown():
+    c = mk()
+    def bad(a): raise RuntimeError("no read")
+    c.snapshot = bad
+    assert run(c).touched["mail"] == ["unknown: could not read (no read)"]
