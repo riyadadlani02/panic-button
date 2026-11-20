@@ -214,11 +214,14 @@ def watch_once(results: list[Result], connectors: dict[str, Connector], accounts
     lines: list[str] = []
     log_failed = False
 
-    def note(event: str, step: Step, detail: str, line: str):
+    def note(event: str, step: Step, detail: str, line: str, removed: list[str] | None = None):
         nonlocal log_failed
         lines.append(line)
+        entry = {"event": event, "account": step.account, "action": step.action, "detail": detail}
+        if removed is not None:  # its own key, so the log writer can withhold it
+            entry["removed"] = removed
         try:
-            log({"event": event, "account": step.account, "action": step.action, "detail": detail})
+            log(entry)
         except Exception as e:  # a broken log must not stop the watch
             if not log_failed:
                 log_failed = True
@@ -260,11 +263,11 @@ def watch_once(results: list[Result], connectors: dict[str, Connector], accounts
             gone = outside_baseline(conn.snapshot(by_id[step.account]), before) if before is not None else None
         except Exception as e:
             gone, why = None, str(e)
-        removed = f"removed: {', '.join(gone) or 'nothing'}" if gone is not None else f"removed: unknown (could not read: {why})"
+        removed = gone if gone is not None else [f"unknown: could not read ({why})"]
         if fixed:
-            note("reapplied", step, f"put back; {removed}", f"{name}: was changed, put back")
+            note("reapplied", step, "put back", f"{name}: was changed, put back", removed)
         else:
-            note("reapply_failed", step, f"{err}; {removed}", f"{name}: was changed and could not be put back ({err})")
+            note("reapply_failed", step, err, f"{name}: was changed and could not be put back ({err})", removed)
     return lines
 
 

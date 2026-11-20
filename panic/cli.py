@@ -195,7 +195,8 @@ def cmd_removed(a) -> int:
         raise CliError(f"Not a valid account: {uid}. Valid ids: {', '.join(_unprotected(s)) or 'none'}.")
     # Every press, newest first: a re-press reads after the first one already removed things.
     shown = [o for o in reversed(_outcomes(s)) if o.removed.get(uid) or o.touched.get(uid)]
-    if not shown:
+    watched = s.data.get("watch_removed", {}).get(uid, [])
+    if not shown and not watched:
         raise CliError(f"No press has recorded anything for {uid}.")
     # Unredacted on purpose: this is how an admin hands a user back their own deleted settings.
     for o in shown:
@@ -204,6 +205,8 @@ def cmd_removed(a) -> int:
                              ("Attacker may have touched", o.touched.get(uid, []))):
             print(f"{title}:")
             print("\n".join(f"  - {i}" for i in items) or "  Nothing.")
+    print("Removed by the watch:")
+    print("\n".join(f"  - {i}" for i in watched) or "  Nothing.")
     return 0
 
 

@@ -791,3 +791,37 @@ def test_removed_still_prints_an_earlier_press_after_a_re_press(armed, patch_wat
     assert f"press of {time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(first))}" in out
     assert out.count("filters: evil") == 2 and out.count("press of") == 1
     assert cli("removed", "--user", "bank") == 1
+
+
+def _watch_removes_a_secret_filter(armed, patch_watch):
+    """Press one Workspace user, then a watch pass deletes a filter the attacker added afterwards."""
+    ws = _ws_armed(armed)
+    ws.steps = [Step("", "filters", Phase.PURGE, Tier.API, "Filters", watch=WatchPolicy.REAPPLY)]
+    conns = {"fake": fake, "google_workspace": ws}
+    cli("press", "--user", "w@d.com", connectors=conns)
+    results, live, accounts, baselines, _, logfn = patch_watch.call_args.args
+    ws.state["w@d.com/filters"] = False
+    ws.snapshot = lambda a: {"filters": []} if ws.state["w@d.com/filters"] else {"filters": ["from:x subject:secret"]}
+    executor.watch_once(results, live, accounts, baselines, set(), logfn)
+    return conns
+
+
+def test_watch_removals_are_withheld_from_the_log_and_printed_by_removed(armed, patch_watch, capsys):
+    conns = _watch_removes_a_secret_filter(armed, patch_watch)
+    text = log_path.read_text()
+    assert "secret" not in text and "filters: 1 not in baseline (contents withheld)" in text
+    capsys.readouterr()
+    assert cli("removed", "--user", "w@d.com", connectors=conns) == 0
+    assert "Removed by the watch:\n  - filters: from:x subject:secret\n" in capsys.readouterr().out
+
+
+def test_watch_removals_still_logged_when_the_vault_cannot_be_written(armed, patch_watch, monkeypatch):
+    real = vault.save
+    def save(path, data, *a):
+        if "watch_removed" in data: raise OSError("disk full")
+        real(path, data, *a)
+    monkeypatch.setattr(vault, "save", save)
+    _watch_removes_a_secret_filter(armed, patch_watch)
+    last = log.entries(log_path)[-1]
+    assert last["event"] == "reapplied" and "disk full" in last["detail"] and "secret" not in json.dumps(last)
+    assert last["removed"] == ["filters: 1 not in baseline (contents withheld)"]

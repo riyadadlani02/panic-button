@@ -120,6 +120,13 @@ class Session:
         self.new = self.new_key = False
 
     def log(self, entry: dict) -> None:
+        if entry.get("removed"):
+            acct, items = entry.get("account"), entry["removed"]
+            try:  # the vault keeps them whole so `panic removed` can hand them back
+                self.update(lambda d: d.setdefault("watch_removed", {}).setdefault(acct, []).extend(items))
+            except Exception as e:  # the log line matters more than the vault copy
+                entry = {**entry, "detail": f"{entry.get('detail', '')}; could not save the removed items: {e}"}
+            entry = {**entry, "removed": _redact({acct: items}, self.accounts)[acct]}
         if not self.log_path.exists():  # log.append would create it world-readable
             _private_write(self.log_path, b"")
         log.append(self.log_path, entry)

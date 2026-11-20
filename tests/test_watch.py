@@ -120,11 +120,19 @@ def test_reapply_logs_what_it_removed(c, seen):
     c.state["mail/fwd"] = False
     c.snapshot = lambda a: {"filters": ["keep"]} if c.ran else {"filters": ["keep", "evil"]}
     watch_once([locked("fwd", WatchPolicy.REAPPLY)], {"fake": c}, A, {}, set(), seen.append)
-    assert seen[0]["event"] == "reapplied" and "filters: evil" in seen[0]["detail"] and "keep" not in seen[0]["detail"]
+    assert seen[0]["event"] == "reapplied" and seen[0]["removed"] == ["filters: evil"] and "evil" not in seen[0]["detail"]
 
 
 def test_reapply_with_unreadable_snapshot_says_unknown(c, seen):
     c.state["mail/fwd"] = False
     c.snapshot = lambda a: (_ for _ in ()).throw(RuntimeError("no read"))
     watch_once([locked("fwd", WatchPolicy.REAPPLY)], {"fake": c}, A, {}, set(), seen.append)
-    assert seen[0]["event"] == "reapplied" and "unknown" in seen[0]["detail"] and "no read" in seen[0]["detail"]
+    assert seen[0]["event"] == "reapplied" and seen[0]["removed"] == ["unknown: could not read (no read)"]
+
+
+def test_failed_reapply_logs_what_it_removed_in_its_own_key(c, seen):
+    c.state["mail/fwd"] = False
+    c.run = lambda step, baseline: setattr(c, "snap", {})  # deletes the filter but the setting stays open
+    c.snap = {"filters": ["evil"]}
+    watch_once([locked("fwd", WatchPolicy.REAPPLY)], {"fake": c}, A, {}, set(), seen.append)
+    assert seen[0]["event"] == "reapply_failed" and seen[0]["removed"] == ["filters: evil"] and "evil" not in seen[0]["detail"]
