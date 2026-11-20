@@ -1,11 +1,11 @@
-"""Connector contract, plan compilation, and the press that runs a plan and records evidence."""
+"""Connector contract, plan compilation, the press that runs a plan and records evidence, and the watch that keeps it locked."""
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Protocol
 
 from panic.graph import lock_order, resetters
-from panic.model import Account, Edges, Evidence, Outcome, Phase, Result, Snapshot, Status, Step, Tier
+from panic.model import Account, Edges, Evidence, Outcome, Phase, Result, Snapshot, Status, Step, Tier, WatchPolicy
 
 
 class Connector(Protocol):
@@ -125,3 +125,64 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
                                 detail=f"could not write the audit log: {e}"))
             break
     return Outcome(results, touched, started)
+
+
+def watch_once(results: list[Result], connectors: dict[str, Connector], accounts: list[Account],
+               baselines: dict[str, Snapshot], released: set[str], log: Callable[[dict], None]) -> list[str]:
+    provider = {a.id: a.provider for a in accounts}
+    lines: list[str] = []
+    log_failed = False
+
+    def note(event: str, step: Step, detail: str, line: str):
+        nonlocal log_failed
+        lines.append(line)
+        try:
+            log({"event": event, "account": step.account, "action": step.action, "detail": detail})
+        except Exception as e:  # a broken log must not stop the watch
+            if not log_failed:
+                log_failed = True
+                lines.append(f"could not write the audit log: {e}")
+
+    for r in results:
+        step = r.step
+        if r.status is not Status.LOCKED or step.watch is WatchPolicy.NONE:
+            continue
+        if provider.get(step.account) not in connectors:
+            continue
+        if step.action == "suspend" and step.account in released:  # the owner lifted it on purpose
+            continue
+        conn, base = connectors[provider[step.account]], baselines.get(step.account, {})
+        name = f"{step.account}/{step.action}"
+        try:
+            ok = conn.check(step, base)
+            if ok is not None and not isinstance(ok, bool):
+                raise ValueError(f"unexpected check result {ok!r}")
+        except Exception as e:
+            note("check_failed", step, str(e), f"{name}: could not check ({e})")
+            continue
+        if ok is not False:  # True = unchanged, None = no read-back to watch
+            continue
+        if step.watch is WatchPolicy.REPORT:
+            note("changed", step, "changed since lockdown", f"{name}: changed since lockdown")
+            continue
+        try:
+            conn.run(step, base)
+            fixed = conn.check(step, base) is True
+            err = "still open after reapply"
+        except Exception as e:
+            fixed, err = False, str(e)
+        if fixed:
+            note("reapplied", step, "put back", f"{name}: was changed, put back")
+        else:
+            note("reapply_failed", step, err, f"{name}: was changed and could not be put back ({err})")
+    return lines
+
+
+def watch(results, connectors, accounts, baselines, released: Callable[[], set[str]], log,
+          hours: float = 24, interval_s: float = 300,
+          sleep: Callable[[float], None] = time.sleep, now: Callable[[], float] = time.time) -> None:
+    deadline = now() + hours * 3600
+    while now() < deadline:
+        for line in watch_once(results, connectors, accounts, baselines, released(), log):
+            print(line)
+        sleep(interval_s)
