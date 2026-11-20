@@ -118,3 +118,10 @@ def test_incomplete_imap_pop_response_fails_closed():
     svc.users().settings().getImap().execute.return_value = {}
     with pytest.raises(KeyError):
         conn.check(step(conn, "imap_pop"), {})
+
+
+def test_filter_delete_404_is_not_an_error():
+    from googleapiclient.errors import HttpError
+    conn, svc = make([{"id": "f1", **F1}])
+    svc.users().settings().filters().delete().execute.side_effect = HttpError(MagicMock(status=404, reason="x"), b"{}")
+    conn.run(step(conn, "filters"), {"filters": []})

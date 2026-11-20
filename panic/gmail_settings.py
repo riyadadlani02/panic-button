@@ -1,6 +1,8 @@
 """Gmail settings calls shared by the personal and Workspace connectors."""
 import json
 
+from googleapiclient.errors import HttpError
+
 
 def _s(svc):
     return svc.users().settings()
@@ -12,18 +14,28 @@ def _canon(f: dict) -> str:  # id excluded: Gmail may reissue ids for the same f
     return json.dumps({"criteria": norm(f.get("criteria", {})), "action": norm(f.get("action", {}))}, sort_keys=True)
 
 
-def _list(svc) -> list[dict]:
-    return _s(svc).filters().list(userId="me").execute().get("filter", [])
+def _exec(request, gone_ok: bool = False):
+    try:
+        return request.execute()
+    except HttpError as e:
+        if gone_ok and e.resp.status == 404:
+            return None
+        raise
+
+
+def _list(svc, call=_exec) -> list[dict]:
+    return (call(_s(svc).filters().list(userId="me")) or {}).get("filter", [])
 
 
 def filters(svc) -> list[str]:
     return [_canon(f) for f in _list(svc)]
 
 
-def delete_filters_outside(svc, keep: list[str]) -> None:
-    for f in _list(svc):
+def delete_filters_outside(svc, keep: list[str], call=None) -> None:
+    call = call or _exec  # call(request, gone_ok=False) lets a connector add retries
+    for f in _list(svc, call):
         if _canon(f) not in keep:
-            _s(svc).filters().delete(userId="me", id=f["id"]).execute()
+            call(_s(svc).filters().delete(userId="me", id=f["id"]), gone_ok=True)  # already gone is fine
 
 
 def forwarding(svc) -> list[str]:

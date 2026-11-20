@@ -185,3 +185,28 @@ def test_users_pages_through_the_tenant(conn, directory):
 def test_scopes_cannot_read_mail():
     assert not any(s.endswith(("gmail.readonly", "gmail.modify", "mail.google.com/")) for s in google_workspace.SCOPES)
     assert len(google_workspace.SCOPES) == 4
+
+
+def test_admin_guard_ignores_case(conn, directory, gmail):
+    with pytest.raises(ValueError):
+        conn.run(step("suspend", account="BreakGlass@Corp.test"), {})
+    assert directory.mock_calls == [] and gmail.mock_calls == []
+
+
+def test_release_refuses_the_admin(conn, directory, gmail):
+    with pytest.raises(ValueError):
+        conn.release(Account("Breakglass@corp.test", "google_workspace"))
+    assert directory.mock_calls == [] and gmail.mock_calls == []
+
+
+def test_suspend_readback_treats_absent_field_as_not_suspended(conn, directory):
+    directory.users().get().execute.return_value = {}
+    assert conn.check(step("suspend"), {}) is False
+
+
+def test_filter_delete_404_is_quiet_and_429_is_retried(conn, gmail, sleeps):
+    s = gmail.users().settings().filters()
+    s.list().execute.return_value = {"filter": [{"id": "f1", "criteria": {"from": "x"}, "action": {}}]}
+    s.delete().execute.side_effect = [http_error(429), http_error(404)]
+    conn.run(step("filters"), {"filters": []})
+    assert sleeps == [1]

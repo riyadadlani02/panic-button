@@ -136,10 +136,14 @@ class Workspace:
     def _update(self, acct: str, body: dict):
         self._call(self._dir().users().update(userKey=acct, body=body))
 
+    def _refuse_admin(self, account_id: str) -> None:
+        # Break-glass: second guard behind the engine. Addresses ignore case.
+        if account_id.casefold() == self.admin.casefold():
+            raise ValueError(f"refusing to act on the admin account {account_id}")
+
     def run(self, step: Step, baseline: Snapshot) -> None:
         a, act = step.account, step.action
-        if a == self.admin:  # break-glass: second guard behind the engine
-            raise ValueError(f"refusing to act on the admin account {a}")
+        self._refuse_admin(a)
         d = self._dir()
         if act == "suspend":
             self._update(a, {"suspended": True})
@@ -170,7 +174,7 @@ class Workspace:
                 self._call(self._gmail(a).users().settings().delegates().delete(
                     userId="me", delegateEmail=x), gone_ok=True)
         elif act == "filters":
-            gs.delete_filters_outside(self._gmail(a), self._known(step, baseline, act))
+            gs.delete_filters_outside(self._gmail(a), self._known(step, baseline, act), call=self._call)
         elif act == "imap_pop":
             gs.disable_imap_pop(self._gmail(a))
         elif act == "recovery":
@@ -188,7 +192,7 @@ class Workspace:
     def check(self, step: Step, baseline: Snapshot) -> bool | None:
         a, act = step.account, step.action
         if act == "suspend":
-            return self._call(self._dir().users().get(userKey=a))["suspended"] is True
+            return self._call(self._dir().users().get(userKey=a)).get("suspended") is True
         if act == "forwarding_off":
             return gs.forwarding(self._gmail(a)) == []
         if act == "revoke_apps":
@@ -210,6 +214,7 @@ class Workspace:
         return None
 
     def release(self, account: Account) -> str:
+        self._refuse_admin(account.id)
         pw = secrets.token_urlsafe(32)
         self._update(account.id, {"suspended": False, "password": pw, "changePasswordAtNextLogin": True})
         return pw
