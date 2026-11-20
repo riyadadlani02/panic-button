@@ -66,11 +66,11 @@ def test_locked_without_evidence_is_rendered():
 
 def test_rendered_details(outcome):
     md, _ = report.render(outcome, now=1.0)
-    assert "- mail: E" in md
+    assert "- `mail`: E" in md
     only_verified = Outcome([outcome.results[0]], {"mail": ["a"], "bank": []}, 0.0)
     md, _ = report.render(only_verified, now=1.0)
     assert "### Verified" in md and "### Accepted by provider" not in md and "### Owner confirmed" not in md
-    assert "### mail" in md and "- a" in md and "### bank" not in md
+    assert "### `mail`" in md and "- `a`" in md and "### `bank`" not in md
 
 
 def test_lingering_line_carries_utc_time():
@@ -85,3 +85,37 @@ def test_removed_section_follows_touched():
     assert data["removed"] == {"mail": ["apps: x"], "bank": []}
     md, _ = report.render(Outcome([], {}, 0.0), now=1.0)
     assert md.split("## Removed by this press")[1].strip() == "Nothing."
+
+
+def test_watch_findings_are_listed_under_still_open():
+    r = Result(Step("mail", "fwd", Phase.FREEZE, Tier.API, "Fwd"), Status.LOCKED, Evidence.VERIFIED, at=101.0)
+    events = [
+        {"event": "changed", "account": "mail", "action": "fwd", "at": 50.0},  # before the press
+        {"event": "changed", "account": "mail", "action": "fwd", "at": 200.0},
+        {"event": "changed", "account": "mail", "action": "fwd", "at": 3700.0},
+        {"event": "reapplied", "account": "mail", "action": "fwd", "at": 300.0},
+        {"event": "check_failed", "account": "bank", "action": "x", "at": 400.0},
+        {"event": "reapply_failed", "account": "mail", "action": "imap", "at": "bad"},
+    ]
+    md, data = report.render(Outcome([r], {}, 100.0), now=4000.0, watch_events=events)
+    still = md.split("## Still open")[1].split("##")[0]
+    assert "- `mail`: `fwd` changed (seen 2 times, last 1970-01-01T01:01Z)" in still
+    assert "- `bank`: `x` check_failed (seen 1 times" in still and "reapplied" not in still and "imap" not in still
+    assert len(data["watch"]) == 2
+
+
+def test_header_names_press_time_and_targets():
+    r = Result(Step("mail", "a", Phase.FREEZE, Tier.API, "A"), Status.LOCKED, Evidence.VERIFIED)
+    md, data = report.render(Outcome([r, Result(Step("-", "audit_log", Phase.PURGE, Tier.API, "Audit log"),
+                                                Status.STILL_OPEN)], {}, 3600.0), now=1.0)
+    assert "1970-01-01T01:00Z" in md.split("## Locked")[0] and "Targeted: `mail`." in md
+    assert data["started_at"] == 3600.0 and data["targets"] == ["mail"]
+
+
+def test_untrusted_text_renders_as_code_not_links():
+    r = Result(Step("ma`il", "x", Phase.PURGE, Tier.GUIDED, "Do it", link="https://ok.test/a b"), Status.NEEDS_YOU,
+               detail="see [here](https://evil.test)\n<img src=x>")
+    md, _ = report.render(Outcome([r], {"ma`il": ["filters: [x](https://evil.test) `y`"]}, 0.0,
+                                  {"ma`il": ["apps: <b>x</b>"]}), now=1.0)
+    assert "- `ma'il`: Do it (`see [here](https://evil.test) <img src=x>`) `https://ok.test/a b`" in md
+    assert "- `filters: [x](https://evil.test) 'y'`" in md and "- `apps: <b>x</b>`" in md

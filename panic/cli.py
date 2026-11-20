@@ -60,7 +60,7 @@ def _report_path(s: Session, o: Outcome, ext: str) -> Path:
 
 def _render(s: Session, outcome: Outcome) -> tuple[str, dict]:
     shown = replace(outcome, touched=_redact(outcome.touched, s.accounts), removed=_redact(outcome.removed, s.accounts))
-    return report.render(shown, time.time())
+    return report.render(shown, time.time(), log.entries(s.log_path))
 
 
 def _write_report(s: Session, outcome: Outcome, md: str, data: dict) -> None:
@@ -120,11 +120,6 @@ def _watch(a, s: Session, outcomes: list[Outcome], conns: dict) -> int:
         executor.watch(list(latest.values()), conns, s.accounts, baselines, reload, s.log, hours=hours)
     except KeyboardInterrupt:
         print("Watch stopped. Resume with `panic watch`.")
-    finally:  # watch entries moved the log head; keep report's tamper check honest
-        try:
-            s.update(lambda d: d.__setitem__("log_head", log.head(s.log_path)))
-        except Exception as e:
-            _warn(f"Warning: could not update the log checkpoint: {e}")
     return 0
 
 
@@ -178,7 +173,7 @@ def cmd_watch(a) -> int:
 def cmd_report(a) -> int:
     s = Session(a)
     outcome = _last_outcome(s)
-    if not log.verify(s.log_path) or log.head(s.log_path) != s.data.get("log_head", ""):
+    if not log.verify(s.log_path) or not log.contains(s.log_path, s.data.get("log_head", "")):
         _warn("Warning: the audit log has been changed since the last press.")
     _publish_report(s, outcome)
     own = _report_path(s, outcome, "md")

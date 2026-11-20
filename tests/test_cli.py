@@ -202,18 +202,22 @@ def test_watch_hours_count_from_the_press(armed, patch_watch):
     assert cli("watch") == 0 and not patch_watch.called
 
 
-def test_watch_ctrl_c_stops_cleanly_and_updates_log_head(armed, monkeypatch, capsys):
+def test_watch_ctrl_c_stops_cleanly_and_report_trusts_its_entries(armed, monkeypatch, capsys):
     monkeypatch.setattr(executor, "watch", MagicMock())
     cli("press", "--all")
     before = open_vault()["log_head"]
 
     def interrupted(results, conns, accounts, baselines, released, logfn, hours):
-        logfn({"event": "changed"})
+        logfn({"event": "changed", "account": "mail", "action": "freeze", "detail": "changed since lockdown"})
         raise KeyboardInterrupt
 
     monkeypatch.setattr(executor, "watch", interrupted)
     assert cli("watch") == 0 and "Watch stopped" in capsys.readouterr().out
-    assert open_vault()["log_head"] == log.head(log_path) != before
+    assert open_vault()["log_head"] == before != log.head(log_path)
+    assert cli("report") == 0
+    cap = capsys.readouterr()
+    assert "audit log has been changed" not in cap.err
+    assert "- `mail`: `freeze` changed (seen 1 times" in cap.out.split("## Still open")[1]
 
 
 def test_watch_sees_releases_made_while_it_runs(armed, patch_watch):
@@ -237,7 +241,8 @@ def test_report_warns_when_log_was_edited(armed, patch_watch, capsys):
 
 def test_report_warns_when_log_head_differs_from_vault(armed, patch_watch, capsys):
     cli("press", "--all")
-    log.append(log_path, {"event": "extra"})  # valid chain, but not what the press recorded
+    lines = log_path.read_bytes().splitlines(keepends=True)
+    log_path.write_bytes(b"".join(lines[:-1]))  # valid chain, but the press's last entry is gone
     capsys.readouterr()
     cli("report")
     assert "audit log has been changed" in capsys.readouterr().err

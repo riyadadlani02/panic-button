@@ -39,3 +39,23 @@ def head(path: Path) -> str:
     # The last line's digest pins the whole chain; a truncated tail changes it.
     lines = path.read_bytes().splitlines() if path.exists() else []
     return _digest(lines[-1]) if lines else ""
+
+
+def contains(path: Path, digest: str) -> bool:
+    # A later watch appends, so the press's recorded head need only still be somewhere in the chain.
+    lines = path.read_bytes().splitlines() if path.exists() else []
+    if not digest:
+        return not lines
+    return any(_digest(line) == digest for line in lines)
+
+
+def entries(path: Path) -> list[dict]:
+    out = []
+    for line in path.read_bytes().splitlines() if path.exists() else []:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict):
+            out.append(record)
+    return out

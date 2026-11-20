@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from .model import Evidence, Outcome, Phase, Result, Status
 
 FREEZE_TARGET_S = 60
+WATCH_FINDINGS = ("changed", "reapply_failed", "check_failed")
 _EVIDENCE = [
     (Evidence.VERIFIED, "Verified"),
     (Evidence.ACCEPTED, "Accepted by provider"),
@@ -18,6 +19,11 @@ def _utc(ts: float) -> str:
 def _clean(text: str) -> str:
     # Untrusted text must not be able to start a Markdown line of its own.
     return " ".join(str(text).split())
+
+
+def _code(text: str) -> str:
+    # A code span renders attacker-written text inert: no links, images or HTML.
+    return "`" + _clean(text).replace("`", "'") + "`"
 
 
 def _item(r: Result, detail: str | None = None) -> dict:
@@ -39,20 +45,32 @@ def _freeze_seconds(outcome: Outcome) -> float | None:
 
 
 def _lines(items: list[dict], link: bool = False) -> list[str]:
-    if not items:
-        return ["Nothing."]
     out = []
     for i in items:
-        line = f"- {_clean(i['account'])}: {_clean(i['title'])}"
+        line = f"- {_code(i['account'])}: {_clean(i['title'])}"
         if i["detail"]:
-            line += f" ({_clean(i['detail'])})"
+            line += f" ({_code(i['detail'])})"
         if link and i["link"]:
-            line += f" {_clean(i['link'])}"
+            line += f" {_code(i['link'])}"
         out.append(line)
     return out
 
 
-def render(outcome: Outcome, now: float) -> tuple[str, dict]:
+def _watch_findings(events, since: float) -> list[dict]:
+    """What the watch saw after the press, one entry per (account, action, event) with a count."""
+    seen: dict[tuple, dict] = {}
+    for e in events:
+        at = e.get("at")
+        if e.get("event") not in WATCH_FINDINGS or not isinstance(at, (int, float)) or at <= since:
+            continue
+        key = (str(e.get("account")), str(e.get("action")), e["event"])
+        f = seen.setdefault(key, {"account": key[0], "action": key[1], "event": key[2], "count": 0, "last": at})
+        f["count"] += 1
+        f["last"] = max(f["last"], at)
+    return list(seen.values())
+
+
+def render(outcome: Outcome, now: float, watch_events=()) -> tuple[str, dict]:
     rs = outcome.results
     locked = [_item(r) for r in rs if r.status == Status.LOCKED]
     needs = [_item(r) for r in rs if r.status == Status.NEEDS_YOU]
@@ -62,11 +80,16 @@ def render(outcome: Outcome, now: float) -> tuple[str, dict]:
         for r in rs
         if r.status == Status.LOCKED and r.step.lingers_s > 0 and r.at + r.step.lingers_s > now
     ]
+    watch = _watch_findings(watch_events, outcome.started_at)
+    targets = list(dict.fromkeys(r.step.account for r in rs if r.step.account != "-"))
     freeze = _freeze_seconds(outcome)
     data = {
+        "started_at": outcome.started_at,
+        "targets": targets,
         "locked": locked,
         "needs_you": needs,
         "still_open": still,
+        "watch": watch,
         "touched": outcome.touched,
         "removed": outcome.removed,
         "freeze_seconds": freeze,
@@ -77,14 +100,19 @@ def render(outcome: Outcome, now: float) -> tuple[str, dict]:
         if freeze is not None
         else f"Freeze is not complete (target {FREEZE_TARGET_S}s)."
     )
-    md = ["# Lockdown report", "", head, "", "## Locked", ""]
+    md = ["# Lockdown report", "", f"Press at {_utc(outcome.started_at)} (UTC). "
+          f"Targeted: {', '.join(_code(t) for t in targets) or 'none'}.", "", head, "", "## Locked", ""]
     if not locked:
         md += ["Nothing.", ""]
     for ev, label in [*_EVIDENCE, (None, "Evidence not recorded")]:
         items = [i for i in locked if i["evidence"] == (ev.value if ev else None)]
         if items:
             md += [f"### {label}", "", *_lines(items), ""]
-    md += ["## Needs you", "", *_lines(needs, link=True), "", "## Still open", "", *_lines(still), ""]
+    open_lines = _lines(still) + [
+        f"- {_code(w['account'])}: {_code(w['action'])} {w['event']} (seen {w['count']} times, last {_utc(w['last'])})"
+        for w in watch]
+    md += ["## Needs you", "", *(_lines(needs, link=True) or ["Nothing."]), ""]
+    md += ["## Still open", "", *(open_lines or ["Nothing."]), ""]
     md += _per_account("Attacker may have touched", outcome.touched)
     md += _per_account("Removed by this press", outcome.removed)
     return "\n".join(md).rstrip("\n") + "\n", data
@@ -96,5 +124,5 @@ def _per_account(heading: str, items: dict[str, list[str]]) -> list[str]:
         md += ["Nothing.", ""]
     for acct, ts in items.items():
         if ts:
-            md += [f"### {_clean(acct)}", "", *(f"- {_clean(t)}" for t in ts), ""]
+            md += [f"### {_code(acct)}", "", *(f"- {_code(t)}" for t in ts), ""]
     return md
