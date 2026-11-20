@@ -210,3 +210,15 @@ def test_filter_delete_404_is_quiet_and_429_is_retried(conn, gmail, sleeps):
     s.delete().execute.side_effect = [http_error(429), http_error(404)]
     conn.run(step("filters"), {"filters": []})
     assert sleeps == [1]
+
+
+def test_verify_admin_needs_the_primary_address_of_a_super_admin(conn, directory):
+    get = directory.users().get
+    get().execute.return_value = {"primaryEmail": "BreakGlass@corp.test", "isAdmin": True}
+    conn.verify_admin()
+    get.assert_called_with(userKey=ADMIN)
+    for bad in ({"primaryEmail": "real@corp.test", "isAdmin": True}, {"primaryEmail": ADMIN, "isAdmin": False},
+                {"primaryEmail": ADMIN}):
+        get().execute.return_value = bad
+        with pytest.raises(ValueError):
+            conn.verify_admin()

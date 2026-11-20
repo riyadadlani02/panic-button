@@ -90,6 +90,12 @@ class Workspace:
                 return out
             kw["pageToken"] = r["nextPageToken"]
 
+    def verify_admin(self) -> None:
+        # An alias would leave the real primary address unprotected, and only a super admin can act for all users.
+        u = self._call(self._dir().users().get(userKey=self.admin))
+        if str(u.get("primaryEmail", "")).casefold() != self.admin.casefold() or u.get("isAdmin") is not True:
+            raise ValueError(f"{self.admin} is not the primary address of a super admin")
+
     def catalog(self, account: Account) -> list[Step]:
         return [Step(account.id, a, ph, Tier.API, title, None, w, l) for a, ph, w, l, title in _CATALOG]
 

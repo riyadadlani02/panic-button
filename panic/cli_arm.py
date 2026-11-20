@@ -4,7 +4,7 @@ from pathlib import Path
 
 from panic import executor, google_personal
 from panic.model import Account, Step
-from panic.session import CliError, Session, _connectors, _unprotected, _upsert, _warn, _yes
+from panic.session import YES, CliError, Session, _connectors, _redact, _unprotected, _upsert, _warn, _yes
 
 # Workspace rehearsal shows these as flags only; their contents are never printed.
 WORKSPACE_FLAGS = ("forwarding", "forwarding_addresses", "delegates", "recovery")
@@ -115,17 +115,28 @@ def _arm_workspace(a) -> int:
     prior = {x.id: x for x in s.accounts}
     if admin in prior and prior[admin].provider != "google_workspace":
         raise CliError(f"{admin} is already armed as a {prior[admin].provider} account; refusing to replace it.")
+    ws = (a.connectors or {}).get("google_workspace") or Workspace(sa_info, admin, a.domain)
     try:
-        ws = (a.connectors or {}).get("google_workspace") or Workspace(sa_info, admin, a.domain)
+        ws.verify_admin()
+    except Exception as e:
+        raise CliError(f"refusing to arm: {e}")
+    try:
         users = list(dict.fromkeys([u.lower() for u in ws.users()] + [admin]))
     except Exception as e:
         raise CliError(f"could not list the Workspace users: {e}")
+    other = [u for u in users if u in prior and prior[u].provider != "google_workspace"]
+    if other:
+        _warn("Warning: already armed under another provider, skipped: " + ", ".join(other))
+    users = [u for u in users if u not in other]
     failed: list[str] = []
     armed: list[tuple[Account, dict | None]] = []
     for u in users:
-        acct = Account(u, "google_workspace", protected=(u == admin or (u in prior and prior[u].protected)))
+        acct = prior.get(u) or Account(u, "google_workspace")
+        if u == admin:  # the break-glass admin is always protected, whatever it was before
+            acct = Account(u, "google_workspace", protected=True)
         snap = None
-        if not acct.protected:  # the break-glass admin is never read either
+        # Re-arm never replaces a baseline: that would absorb whatever an attacker has added since.
+        if not acct.protected and u not in s.data["baselines"]:  # the break-glass admin is never read either
             try:
                 snap = ws.snapshot(acct)
             except Exception:
@@ -176,7 +187,10 @@ def cmd_rehearse(a) -> int:
         out = executor.outside_baseline(base.get(acct.id, {}), snap)
         if acct.provider == "google_workspace":
             flags = sorted({o.split(":", 1)[0] for o in out} & set(WORKSPACE_FLAGS))
+            flags += [i for i in _redact({acct.id: out}, [acct])[acct.id] if i.startswith("filters:")]
             print(f"{acct.id}: " + ("changed since baseline: " + ", ".join(flags) if flags else "no flagged changes"))
+            if out and input(f"Accept {acct.id}'s current settings as the new baseline? [y/N] ").strip().lower() in YES:
+                approved[acct.id] = snap
         elif not out:
             print(f"{acct.id}: matches the baseline")
         else:

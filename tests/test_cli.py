@@ -359,6 +359,9 @@ class FakeWorkspace(FakeConnector):
     def users(self):
         return self._users
 
+    def verify_admin(self):
+        pass
+
     def snapshot(self, account):
         s = self.snaps[account.id]
         if isinstance(s, Exception):
@@ -386,15 +389,16 @@ def test_arm_workspace_protects_admin_records_edges_and_warns(bare, capsys):
     assert d["credentials"]["google_workspace"]["admin"] == "admin@d.com"
 
 
-def test_rehearse_workspace_shows_flags_only_and_asks_nothing(armed, capsys):
+def test_rehearse_workspace_shows_flags_and_filter_count_only(armed, capsys):
     d = open_vault()
     d["accounts"].append({"id": "w@d.com", "provider": "google_workspace", "protected": False})
     d["baselines"]["w@d.com"] = {}
     vault.save(vpath, d, PW, kpath.read_bytes())
-    ws = FakeWorkspace([], {"w@d.com": {"forwarding": ["secret@x.com"], "filters": ["f"]}})
-    cli("rehearse", connectors={"google_workspace": ws}, answers=[])
+    ws = FakeWorkspace([], {"w@d.com": {"forwarding": ["secret@x.com"], "filters": ["subject:hidden"]}})
+    cli("rehearse", connectors={"google_workspace": ws}, answers=["n"])
     out = capsys.readouterr().out
-    assert "w@d.com: changed since baseline: forwarding" in out and "secret@x.com" not in out and "filters:" not in out
+    assert "w@d.com: changed since baseline: forwarding, filters: 1 not in baseline (contents withheld)" in out
+    assert "secret@x.com" not in out and "hidden" not in out
     assert open_vault()["baselines"]["w@d.com"] == {}
 
 
@@ -691,3 +695,48 @@ def test_removed_prints_one_accounts_items_unredacted(armed, patch_watch, capsys
     out = capsys.readouterr().out
     assert out.count("filters: from:x subject:secret") == 2  # removed, and outside the baseline
     assert cli("removed", "--user", "boss") == 1 and cli("removed", "--user", "nobody") == 1
+
+
+def test_rehearse_workspace_accepts_current_settings_on_yes(armed):
+    d = open_vault()
+    d["accounts"].append({"id": "w@d.com", "provider": "google_workspace", "protected": False})
+    d["baselines"]["w@d.com"] = {}
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    ws = FakeWorkspace([], {"w@d.com": {"delegates": ["pa@d.com"]}})
+    prompts = []
+    with patch("getpass.getpass", return_value=PW), \
+            patch("builtins.input", lambda p="": prompts.append(p) or "y"):
+        main(["--vault", str(vpath), "--keyfile", str(kpath), "rehearse"], connectors={"google_workspace": ws})
+    assert prompts == ["Accept w@d.com's current settings as the new baseline? [y/N] "]
+    assert open_vault()["baselines"]["w@d.com"] == {"delegates": ["pa@d.com"]}
+
+
+def test_workspace_arm_refuses_an_admin_that_is_not_a_primary_super_admin(bare, capsys):
+    (sa := bare / "sa.json").write_text("{}")
+    ws = FakeWorkspace(["a@d.com"], {"a@d.com": {}})
+    ws.verify_admin = lambda: (_ for _ in ()).throw(ValueError("alias@d.com is not a super admin's primary address"))
+    assert cli("arm", "--workspace", "--sa-key", str(sa), "--admin", "alias@d.com", "--domain", "d.com",
+               connectors={"google_workspace": ws}) == 1
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and "primary address" in err[0] and not vpath.exists() and ws.ran == []
+
+
+def test_workspace_re_arm_keeps_existing_baselines_and_skips_other_providers(armed, capsys):
+    (sa := vpath.parent / "sa.json").write_text("{}")
+    first = FakeWorkspace(["old@d.com", "gap@d.com"], {"old@d.com": {"filters": ["ok"]}, "gap@d.com": RuntimeError("x")})
+    cli("arm", "--workspace", "--sa-key", str(sa), "--admin", "adm@d.com", "--domain", "d.com",
+        connectors={"google_workspace": first})
+    accounts_before = {a["id"]: a for a in open_vault()["accounts"]}
+    again = FakeWorkspace(["old@d.com", "gap@d.com", "new@d.com", "mail"],
+                          {"old@d.com": {"filters": ["ok", "attacker"]}, "gap@d.com": {"filters": []},
+                           "new@d.com": {"filters": ["n"]}, "mail": {"filters": ["m"]}})
+    capsys.readouterr()
+    assert cli("arm", "--workspace", "--sa-key", str(sa), "--admin", "adm@d.com", "--domain", "d.com",
+               connectors={"google_workspace": again}) == 0
+    d = open_vault()
+    assert d["baselines"]["old@d.com"] == {"filters": ["ok"]}
+    assert d["baselines"]["gap@d.com"] == {"filters": []} and d["baselines"]["new@d.com"] == {"filters": ["n"]}
+    by = {a["id"]: a for a in d["accounts"]}
+    assert by["mail"]["provider"] == "fake" and d["baselines"]["mail"] == {}
+    assert all(by[i] == accounts_before[i] for i in accounts_before)
+    assert "mail" in capsys.readouterr().err
