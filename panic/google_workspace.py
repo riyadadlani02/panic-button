@@ -44,6 +44,7 @@ _CATALOG = [
     ("recovery", P, R, 0, "Restore recovery email and phone to the baseline"),
     ("reset_password", P, N, 0, "Set a random password and force a change"),
 ]
+_AFTER_READ = {"forwarding_off"}  # turning it off erases the forwarding address the first read records
 
 
 class Workspace:
@@ -97,7 +98,7 @@ class Workspace:
             raise ValueError(f"{self.admin} is not the primary address of a super admin")
 
     def catalog(self, account: Account) -> list[Step]:
-        return [Step(account.id, a, ph, Tier.API, title, None, w, l) for a, ph, w, l, title in _CATALOG]
+        return [Step(account.id, a, ph, Tier.API, title, None, w, l, a in _AFTER_READ) for a, ph, w, l, title in _CATALOG]
 
     # -- reads ---------------------------------------------------------
     def _recovery(self, acct: str) -> list[str]:

@@ -222,3 +222,8 @@ def test_verify_admin_needs_the_primary_address_of_a_super_admin(conn, directory
         get().execute.return_value = bad
         with pytest.raises(ValueError):
             conn.verify_admin()
+
+
+def test_only_forwarding_off_waits_for_the_first_read(sa_info):
+    ws = Workspace(sa_info, ADMIN, "corp.test", build=lambda *a, **k: MagicMock())
+    assert [s.action for s in ws.catalog(ACCT) if s.after_read] == ["forwarding_off"]

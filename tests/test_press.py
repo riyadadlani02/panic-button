@@ -270,3 +270,26 @@ def test_interrupt_before_the_second_read_marks_removed_unknown():
     out = press(compile_plan(A, E, {"fake": c}), A, E, {"fake": c}, {}, lambda s: True, log)
     assert "mail/purge" in c.ran
     assert out.removed["mail"] == out.removed["bank"] == ["unknown: not read (interrupted)"]
+
+
+def test_after_read_steps_wait_for_their_accounts_read_without_stalling_the_pool():
+    accts = [Account(f"u{n}", "fake") for n in range(40)]
+    c = FakeConnector(steps=[Step("", "lock", Phase.FREEZE, Tier.API, "Lock"),
+                             Step("", "evidence", Phase.FREEZE, Tier.API, "Evidence", after_read=True)])
+    order, guard = [], threading.Lock()
+    locked = {a.id: threading.Event() for a in accts}
+    run_, snapshot = c.run, c.snapshot
+    def run(step, baseline):
+        with guard: order.append(("run", step.account, step.action))
+        run_(step, baseline)
+        if step.action == "lock": locked[step.account].set()
+    def snap(a):  # each read holds a worker until its own immediate lock has run
+        assert locked[a.id].wait(10)
+        s = snapshot(a)
+        with guard: order.append(("read", a.id, ""))
+        return s
+    c.run, c.snapshot = run, snap
+    out = press(compile_plan(accts, [], {"fake": c}), accts, [], {"fake": c}, {}, lambda s: True, lambda e: None)
+    assert len(out.results) == 80 and all(r.status is Status.LOCKED for r in out.results)
+    for a in accts:
+        assert order.index(("read", a.id, "")) < order.index(("run", a.id, "evidence"))

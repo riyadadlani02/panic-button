@@ -35,6 +35,7 @@ _CATALOG = [
      "`panic arm --personal <email> --reconnect` straight after so the 24-hour watch can continue."),
 ]
 _TIER = {c[0]: c[2] for c in _CATALOG}
+_AFTER_READ = {"imap_pop"}  # turning it off erases the IMAP/POP state the first read records
 
 
 def authorize(client_config: dict, login_hint: str | None = None) -> dict:
@@ -70,7 +71,7 @@ class Personal:
         return cache[account_id]
 
     def catalog(self, account: Account) -> list[Step]:
-        return [Step(account.id, a, ph, t, title, link, w, l) for a, ph, t, w, l, link, title in _CATALOG]
+        return [Step(account.id, a, ph, t, title, link, w, l, a in _AFTER_READ) for a, ph, t, w, l, link, title in _CATALOG]
 
     def snapshot(self, account: Account) -> Snapshot:
         svc = self._svc(account.id)

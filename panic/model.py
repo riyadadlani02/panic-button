@@ -48,6 +48,7 @@ class Step:
     link: str | None = None
     watch: WatchPolicy = WatchPolicy.NONE
     lingers_s: int = 0
+    after_read: bool = False  # starts once the account's first read is done, so its evidence is captured
 
 
 @dataclass

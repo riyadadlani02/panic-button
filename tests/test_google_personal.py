@@ -156,3 +156,8 @@ def test_authorize_uses_the_client_config_and_login_hint(monkeypatch):
     assert google_personal.authorize({"installed": {}}, login_hint="me@x.test") == {"refresh_token": "r"}
     flow.from_client_config.assert_called_with({"installed": {}}, google_personal.SCOPES)
     flow.from_client_config.return_value.run_local_server.assert_called_with(port=0, login_hint="me@x.test")
+
+
+def test_only_imap_pop_waits_for_the_first_read():
+    conn, _ = make()
+    assert [s.action for s in conn.catalog(ACCT) if s.after_read] == ["imap_pop"]

@@ -81,6 +81,11 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
             return done(step, Status.STILL_OPEN, detail="provider accepted the call but the read-back still shows it open")
         return done(step, Status.LOCKED, Evidence.VERIFIED if ok is True else Evidence.ACCEPTED)
 
+    def api_after(read: Future, step: Step) -> Result:
+        # Queued after its read, and the pool is FIFO: the read is already running or done, so no worker deadlocks.
+        wait([read])  # a failed read still lets the lock run: the lock matters more than the evidence
+        return api(step)
+
     if dry_run:
         for i in targets:
             try:
@@ -120,7 +125,8 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
             if phase is Phase.FREEZE:
                 for i in targets:  # each read is queued beside its own freeze, so it never holds up the first lock
                     snaps[i] = pool.submit(snap, i)
-                    futures.update({s: pool.submit(api, s) for s in steps if s.account == i})
+                    futures.update({s: pool.submit(api_after, snaps[i], s) if s.after_read else pool.submit(api, s)
+                                    for s in steps if s.account == i})
             else:
                 futures.update({s: pool.submit(api, s) for s in steps})
             pending = {futures[s]: s for s in steps}

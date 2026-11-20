@@ -769,3 +769,10 @@ def test_unreadable_log_does_not_hide_the_report(armed, patch_watch, monkeypatch
     assert cli("press", "--all") == 0
     cap = capsys.readouterr()
     assert "## Locked" in cap.out and "denied" in cap.err
+
+
+def test_outcome_without_after_read_still_loads():
+    st = Step("a", "x", Phase.FREEZE, Tier.API, "T")
+    d = outcome_to_json(Outcome([Result(st, Status.LOCKED)], {}, 1.0))
+    del d["results"][0]["step"]["after_read"]
+    assert outcome_from_json(d).results[0].step.after_read is False
