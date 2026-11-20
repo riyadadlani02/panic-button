@@ -33,3 +33,9 @@ def verify(path: Path) -> bool:
             return False
         prev = _digest(line)
     return True
+
+
+def head(path: Path) -> str:
+    # The last line's digest pins the whole chain; a truncated tail changes it.
+    lines = path.read_bytes().splitlines() if path.exists() else []
+    return _digest(lines[-1]) if lines else ""

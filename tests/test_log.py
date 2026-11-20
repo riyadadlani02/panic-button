@@ -25,3 +25,15 @@ def test_torn_last_line_does_not_block_new_entries(tmp_path):
     log.append(p, {"e": 3})
     assert not log.verify(p)
     assert json.loads(p.read_text().splitlines()[-1])["e"] == 3
+
+
+def test_head_is_digest_of_last_line(tmp_path):
+    import hashlib
+    p = tmp_path / "log.jsonl"
+    assert log.head(p) == ""
+    p.write_bytes(b"")
+    assert log.head(p) == ""
+    log.append(p, {"e": 1}); log.append(p, {"e": 2})
+    assert log.head(p) == hashlib.sha256(p.read_bytes().splitlines()[-1]).hexdigest()
+    log.append(p, {"e": 3})
+    assert log.head(p) == hashlib.sha256(p.read_bytes().splitlines()[-1]).hexdigest()
