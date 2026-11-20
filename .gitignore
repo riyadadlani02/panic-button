@@ -3,3 +3,9 @@ __pycache__/
 *.vault
 *.key
 .superpowers/
+*.report-*.md
+*.report-*.json
+*.log.jsonl
+sa.json
+*service-account*.json
+client_secret*.json

@@ -740,3 +740,25 @@ def test_workspace_re_arm_keeps_existing_baselines_and_skips_other_providers(arm
     assert by["mail"]["provider"] == "fake" and d["baselines"]["mail"] == {}
     assert all(by[i] == accounts_before[i] for i in accounts_before)
     assert "mail" in capsys.readouterr().err
+
+
+def test_release_records_the_id_before_unsuspending(armed, capsys):
+    seen = []
+    fake.release = lambda a: seen.append(open_vault()["released"]) or "temp-pw"
+    assert cli("release", "--user", "mail", answers=["y"]) == 0
+    assert seen == [["mail"]] and "temp-pw" in capsys.readouterr().out
+
+
+def test_failed_release_is_taken_back_out_of_released(armed, capsys):
+    fake.release = lambda a: (_ for _ in ()).throw(RuntimeError("api down"))
+    assert cli("release", "--user", "mail", answers=["y"]) == 1
+    assert open_vault()["released"] == [] and "api down" in capsys.readouterr().err
+
+
+def test_guard_names_an_exception_without_a_message(capsys):
+    from panic.cli import _guard
+
+    def interrupted():
+        raise KeyboardInterrupt
+    _guard("save", interrupted)
+    assert "could not save: KeyboardInterrupt" in capsys.readouterr().err

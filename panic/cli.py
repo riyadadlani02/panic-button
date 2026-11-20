@@ -34,7 +34,7 @@ def _guard(what: str, fn) -> None:
     try:
         fn()
     except (Exception, KeyboardInterrupt) as e:
-        _warn(f"Warning: could not {what}: {e or type(e).__name__}")
+        _warn(f"Warning: could not {what}: {str(e) or type(e).__name__}")
 
 
 # -- map ----------------------------------------------------------------
@@ -214,11 +214,13 @@ def cmd_release(a) -> int:
     if not _yes(f"Release {uid}? This unsuspends it and sets a temporary password."):
         print("Nothing changed.")
         return 1
+    # Recorded first, so a running watch never re-suspends an account that was just released.
+    s.update(lambda d: d.__setitem__("released", sorted({*d.get("released", []), uid})))
     try:
         pw = conn.release(acct)
     except Exception as e:
+        s.update(lambda d: d.__setitem__("released", sorted(set(d.get("released", [])) - {uid})))
         raise CliError(f"could not release {uid}: {e}")
-    s.update(lambda d: d.__setitem__("released", sorted({*d.get("released", []), uid})))
     print(f"Released {uid}. Temporary password (shown once): {pw}")
     return 0
 
