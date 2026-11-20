@@ -180,6 +180,7 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
     for i in targets:
         if i not in touched:
             take_first(i)
+        removed.setdefault(i, ["unknown: not read (interrupted)"])  # never "Nothing." after a purge ran
     results = [finished[s] for s in plan]
 
     # Every account counts as a possible open root, but only targets get a re-openable line.

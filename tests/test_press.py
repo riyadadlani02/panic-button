@@ -260,3 +260,13 @@ def test_dry_run_reads_only_targets_and_removes_nothing():
     c = mk(); reads = []; c.snapshot = lambda a: reads.append(a.id) or {}
     out = press(compile_plan([A[0]], E, {"fake": c}), A, E, {"fake": c}, {}, lambda s: True, lambda e: None, dry_run=True)
     assert reads == ["mail"] and out.removed == {}
+
+
+def test_interrupt_before_the_second_read_marks_removed_unknown():
+    c = mk()
+    c.snapshot = lambda a: {"filters": []} if f"{a.id}/purge" in c.ran else {"filters": ["evil"]}
+    def log(e):
+        if e["action"] == "purge" and e["account"] == "mail": raise KeyboardInterrupt
+    out = press(compile_plan(A, E, {"fake": c}), A, E, {"fake": c}, {}, lambda s: True, log)
+    assert "mail/purge" in c.ran
+    assert out.removed["mail"] == out.removed["bank"] == ["unknown: not read (interrupted)"]
