@@ -4,7 +4,7 @@ from pathlib import Path
 
 from panic import executor, google_personal
 from panic.model import Account, Step
-from panic.session import CliError, Session, _connectors, _unprotected, _warn, _yes
+from panic.session import CliError, Session, _connectors, _unprotected, _upsert, _warn, _yes
 
 # Workspace rehearsal shows these as flags only; their contents are never printed.
 WORKSPACE_FLAGS = ("forwarding", "forwarding_addresses", "delegates", "recovery")
@@ -41,19 +41,26 @@ def _print_snapshot(snap: dict) -> None:
             print(f"  - {i}")
 
 
+def _set_token(d: dict, email: str, token: dict) -> None:
+    d["credentials"].setdefault("google_personal", {})[email] = token
+
+
 def _arm_personal(a) -> int:
-    if not a.client_secrets:
-        raise CliError("--client-secrets FILE is required to sign in.")
     email = a.personal.lower()
-    config = _client_config(a)
     if a.reconnect:
         s = Session(a)
         if not any(x.id == email and x.provider == "google_personal" for x in s.accounts):
             raise CliError(f"{email} is not armed. Arm it first, without --reconnect.")
-        s.data["credentials"].setdefault("google_personal", {})[email] = _sign_in(a, config, email)
-        s.save()
+        stored = s.data["credentials"].get("google_client")
+        if not (a.client_secrets or stored):
+            raise CliError("--client-secrets FILE is required to sign in.")
+        token = _sign_in(a, _client_config(a) if a.client_secrets else stored, email)
+        s.update(lambda d: _set_token(d, email, token))
         print(f"Reconnected {email}.")
         return 0
+    if not a.client_secrets:
+        raise CliError("--client-secrets FILE is required to sign in.")
+    config = _client_config(a)
     if not _yes(f"Do you hold a way to recover {email} that does not depend on {email} itself "
                 "(printed backup codes or a security key)?"):
         _warn(f"Not armed: set up a recovery method for {email} that does not depend on it, then arm again.")
@@ -83,10 +90,14 @@ def _arm_personal(a) -> int:
         if not unknown:
             break
         print("Not armed accounts: " + ", ".join(unknown))
-    s.upsert(account, snap)
-    s.data["credentials"].setdefault("google_personal", {})[email] = token
-    s.data["edges"] += [[p, email] for p in picks if [p, email] not in s.data["edges"]]
-    s.save()
+
+    def change(d: dict) -> None:
+        _upsert(d, account, snap)
+        _set_token(d, email, token)
+        d["credentials"].setdefault("google_client", config)  # lets --reconnect run without the file
+        d["edges"] += [[p, email] for p in picks if [p, email] not in d["edges"]]
+
+    s.update(change)
     print(f"Armed {email}.")
     return 0
 
@@ -110,6 +121,7 @@ def _arm_workspace(a) -> int:
     except Exception as e:
         raise CliError(f"could not list the Workspace users: {e}")
     failed: list[str] = []
+    armed: list[tuple[Account, dict | None]] = []
     for u in users:
         acct = Account(u, "google_workspace", protected=(u == admin or (u in prior and prior[u].protected)))
         snap = None
@@ -118,14 +130,19 @@ def _arm_workspace(a) -> int:
                 snap = ws.snapshot(acct)
             except Exception:
                 failed.append(u)
-        s.upsert(acct, snap)
-    for u in users:  # a recovery address that is itself armed can reset the user
-        for item in s.data["baselines"].get(u, {}).get("recovery", []):
-            r = item.removeprefix("email:").lower() if item.startswith("email:") else None
-            if r and r != u and r in users and [r, u] not in s.data["edges"]:
-                s.data["edges"].append([r, u])
-    s.data["credentials"]["google_workspace"] = {"sa_info": sa_info, "admin": admin, "domain": a.domain}
-    s.save()
+        armed.append((acct, snap))
+
+    def change(d: dict) -> None:
+        for acct, snap in armed:
+            _upsert(d, acct, snap)
+        for u in users:  # a recovery address that is itself armed can reset the user
+            for item in d["baselines"].get(u, {}).get("recovery", []):
+                r = item.removeprefix("email:").lower() if item.startswith("email:") else None
+                if r and r != u and r in users and [r, u] not in d["edges"]:
+                    d["edges"].append([r, u])
+        d["credentials"]["google_workspace"] = {"sa_info": sa_info, "admin": admin, "domain": a.domain}
+
+    s.update(change)
     if failed:
         _warn("Warning: armed with no baseline (could not be read): " + ", ".join(failed))
     print(f"Armed {len(users)} accounts; {admin} is the protected break-glass account.")
@@ -144,7 +161,7 @@ def cmd_arm(a) -> int:
 
 def cmd_rehearse(a) -> int:
     s = Session(a)
-    conns, bad, changed = _connectors(a, s), False, False
+    conns, bad, approved = _connectors(a, s.data), False, {}
     base = s.data["baselines"]
     for acct in s.accounts:
         conn = conns.get(acct.provider)
@@ -166,10 +183,9 @@ def cmd_rehearse(a) -> int:
             print(f"{acct.id}: outside the baseline:")
             print("\n".join(f"  - {o}" for o in out))
             if _yes(f"Approve this as the new baseline for {acct.id}?"):
-                base[acct.id] = snap
-                changed = True
+                approved[acct.id] = snap
     print("Plan:")
     print("\n".join(_plan_lines(executor.compile_plan(s.accounts, s.edges, conns))) or "  (no steps)")
-    if changed:  # an unchanged rehearsal must not reset saved_at on an exported copy
-        s.save()
+    if approved:  # an unchanged rehearsal must not reset saved_at on an exported copy
+        s.update(lambda d: d["baselines"].update(approved))
     return 1 if bad else 0

@@ -15,7 +15,8 @@ from panic.model import Evidence, Outcome, Phase, Result, Status, Step, Tier, Wa
 
 PW = "pw"
 CLIENT = {"installed": {"client_id": "i"}}
-fake = vpath = kpath = report_path = log_path = cs = None
+fake = vpath = kpath = log_path = cs = None
+REAL_PRESS = executor.press
 
 
 def _steps():
@@ -25,12 +26,12 @@ def _steps():
 @pytest.fixture
 def bare(tmp_path):
     """Paths set, no vault yet."""
-    global fake, vpath, kpath, report_path, log_path, cs
+    global fake, vpath, kpath, log_path, cs
     fake = FakeConnector(steps=_steps())
     cs = tmp_path / "cs.json"
     cs.write_text(json.dumps(CLIENT))
     vpath, kpath = tmp_path / "vault" / "panic.vault", tmp_path / "key"
-    report_path, log_path = Path(f"{vpath}.report.md"), Path(f"{vpath}.log.jsonl")
+    log_path = Path(f"{vpath}.log.jsonl")
     return tmp_path
 
 
@@ -58,6 +59,19 @@ def open_vault():
     return vault.load(vpath, PW, kpath.read_bytes())
 
 
+def reports(ext="md"):
+    return sorted(vpath.parent.glob(f"{vpath.name}.report-*.{ext}"))
+
+
+def latest_report():
+    return reports()[-1]
+
+
+def press_at(monkeypatch, t):
+    """The next press starts at time t."""
+    monkeypatch.setattr(executor, "press", lambda *a, **k: REAL_PRESS(*a, now=lambda: t, **k))
+
+
 def cli(*args, passphrase=PW, answers=(), connectors=None, authorize=None, whoami=None):
     it = iter(answers)
     if whoami is None:  # by default the owner signs in as the account being armed
@@ -79,14 +93,14 @@ def cli(*args, passphrase=PW, answers=(), connectors=None, authorize=None, whoam
 # -- the brief's tests ---------------------------------------------------
 
 def test_dry_run_changes_nothing_and_writes_no_outcome(armed):
-    assert cli("press", "--all", "--dry-run") == 0 and fake.ran == [] and "last_outcome" not in open_vault()
-    assert not report_path.exists()
+    assert cli("press", "--all", "--dry-run") == 0 and fake.ran == [] and "outcomes" not in open_vault()
+    assert reports() == []
 
 
 def test_press_all_skips_protected_and_writes_report_and_log(armed, patch_watch):
     assert cli("press", "--all") == 0
     assert not any(k.startswith("boss/") for k in fake.ran)
-    assert "## Locked" in report_path.read_text() and log.verify(log_path) and patch_watch.called
+    assert "## Locked" in latest_report().read_text() and log.verify(log_path) and patch_watch.called
 
 
 def test_press_requires_a_target_and_rejects_protected_or_unknown(armed):
@@ -135,7 +149,7 @@ def test_outcome_round_trips_through_json():
 
 def test_press_saves_outcome_that_watch_and_report_can_read(armed, patch_watch, capsys):
     cli("press", "--all")
-    out = outcome_from_json(open_vault()["last_outcome"])
+    out = outcome_from_json(open_vault()["outcomes"][-1])
     assert any(r.status is Status.LOCKED for r in out.results)
     assert cli("report") == 0 and "## Locked" in capsys.readouterr().out
     assert cli("watch") == 0 and patch_watch.call_count == 2
@@ -147,20 +161,20 @@ def test_user_ids_are_lower_cased(armed, patch_watch):
 
 def test_untargeted_root_is_reported_reopenable(armed, patch_watch):
     cli("press", "--user", "bank")
-    assert "re-openable from mail" in report_path.read_text()
+    assert "re-openable from mail" in latest_report().read_text()
     assert not any(k.startswith("mail/") for k in fake.ran)
 
 
 def test_report_files_and_log_are_private(armed, patch_watch):
     cli("press", "--all")
-    for p in (report_path, Path(f"{vpath}.report.json"), log_path):
+    for p in (latest_report(), reports("json")[-1], log_path):
         assert stat.S_IMODE(p.stat().st_mode) == 0o600
 
 
 def test_press_saves_outcome_even_when_interrupted_in_guided_step(armed, patch_watch):
     fake.steps.append(Step("", "g", Phase.PURGE, Tier.GUIDED, "Guided"))
     assert cli("press", "--all", answers=[]) == 0  # EOF at the first prompt
-    assert "last_outcome" in open_vault() and report_path.exists()
+    assert "outcomes" in open_vault() and reports() != []
 
 
 def test_press_warns_when_vault_copy_is_stale(armed, patch_watch, capsys):
@@ -182,7 +196,7 @@ def test_watch_hours_count_from_the_press(armed, patch_watch):
     cli("press", "--all")
     assert 23.9 < patch_watch.call_args.kwargs["hours"] <= 24
     d = open_vault()
-    d["last_outcome"]["started_at"] = time.time() - 25 * 3600
+    d["outcomes"][-1]["started_at"] = time.time() - 25 * 3600
     vault.save(vpath, d, PW, kpath.read_bytes())
     patch_watch.reset_mock()
     assert cli("watch") == 0 and not patch_watch.called
@@ -316,7 +330,7 @@ def test_arm_second_account_asks_who_can_reset_it_and_rejects_unknown(armed):
 def test_reconnect_fails_for_unarmed_account(armed):
     calls = []
     rc = cli("arm", "--personal", "ghost@x.com", "--reconnect", "--client-secrets", str(cs),
-             authorize=lambda cfg, login_hint=None: calls.append(p), answers=[])
+             authorize=lambda cfg, login_hint=None: calls.append(cfg), answers=[])
     assert rc == 1 and calls == []
 
 
@@ -404,7 +418,7 @@ def test_report_still_printed_when_report_write_fails(armed, patch_watch, monkey
     monkeypatch.setattr("panic.cli._private_write", boom)
     assert cli("press", "--all") == 0
     cap = capsys.readouterr()
-    assert "## Locked" in cap.out and "read-only" in cap.err and "last_outcome" in open_vault()
+    assert "## Locked" in cap.out and "read-only" in cap.err and "outcomes" in open_vault()
 
 
 def test_personal_arm_cannot_replace_protected_account(armed, capsys):
@@ -412,7 +426,7 @@ def test_personal_arm_cannot_replace_protected_account(armed, capsys):
     calls = []
     rc = cli("arm", "--personal", "boss", "--client-secrets", str(cs), answers=["y"],
              connectors={"google_personal": FakeConnector(provider="google_personal")},
-             authorize=lambda cfg, login_hint=None: calls.append(p))
+             authorize=lambda cfg, login_hint=None: calls.append(cfg))
     assert rc == 1 and calls == [] and vpath.read_bytes() == before
     assert sum(l.startswith("error:") for l in capsys.readouterr().err.splitlines()) == 1
 
@@ -490,8 +504,8 @@ def test_workspace_filter_contents_are_withheld_in_dry_run_and_report(armed, pat
     assert "filters: 2 not in baseline (contents withheld)" in out and "secret" not in out and "forwarding: f@x.com" in out
     cli("press", "--all", connectors=conns)
     out = capsys.readouterr().out
-    assert "contents withheld" in out and "secret" not in out and "secret" not in report_path.read_text()
-    assert "secret" in json.dumps(open_vault()["last_outcome"])
+    assert "contents withheld" in out and "secret" not in out and "secret" not in latest_report().read_text()
+    assert "secret" in json.dumps(open_vault()["outcomes"][-1])
 
 
 def test_rehearse_without_approved_change_does_not_resave_vault(armed):
@@ -536,3 +550,139 @@ def test_reconnect_refuses_a_different_signed_in_account(armed):
     assert cli("arm", "--personal", "new@x.com", "--reconnect", "--client-secrets", str(cs),
                authorize=lambda cfg, login_hint=None: {"t": 2}, whoami=lambda t: "mallory@x.com") == 1
     assert open_vault()["credentials"] == before
+
+
+def test_reconnect_during_a_press_survives_the_press_save(armed, patch_watch):
+    d = open_vault()
+    d["accounts"].append({"id": "p@x.com", "provider": "google_personal", "protected": False})
+    d["credentials"] = {"google_personal": {"p@x.com": {"t": 1}}, "google_client": CLIENT}
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    orig = fake.run
+
+    def run(step, baseline):  # a second process reconnects while the press is running
+        if step.account == "mail" and step.action == "purge":
+            assert main(["--vault", str(vpath), "--keyfile", str(kpath), "arm", "--personal", "p@x.com",
+                         "--reconnect"], authorize=lambda cfg, login_hint=None: {"t": 2},
+                        whoami=lambda t: "p@x.com") == 0
+        orig(step, baseline)
+
+    fake.run = run
+    cli("press", "--user", "mail")
+    assert open_vault()["credentials"]["google_personal"]["p@x.com"] == {"t": 2}
+
+
+def test_reconnect_uses_the_stored_client_config(bare):
+    arm_personal(answers=["y", "y"])
+    assert open_vault()["credentials"]["google_client"] == CLIENT
+    got = []
+    assert cli("arm", "--personal", "me@example.com", "--reconnect",
+               authorize=lambda cfg, login_hint=None: got.append(cfg) or {"t": 2}) == 0
+    assert got == [CLIENT] and open_vault()["credentials"]["google_personal"]["me@example.com"] == {"t": 2}
+
+
+def test_watch_picks_up_a_new_token_and_an_approved_baseline(armed, patch_watch):
+    cli("press", "--user", "mail")
+    d = open_vault()
+    d["credentials"] = {"google_personal": {"p@x.com": {"t": 1}}}
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    with patch("getpass.getpass", return_value=PW):
+        assert main(["--vault", str(vpath), "--keyfile", str(kpath), "watch"]) == 0
+    _, conns, _, baselines, reload = patch_watch.call_args.args[:5]
+    d = open_vault()
+    d["credentials"]["google_personal"]["p@x.com"] = {"t": 2}
+    d["baselines"]["mail"] = {"filters": ["approved"]}
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    reload()
+    assert conns["google_personal"]._tokens == {"p@x.com": {"t": 2}} and baselines["mail"] == {"filters": ["approved"]}
+
+
+def test_press_release_press_again_and_the_watch_re_suspends(armed, patch_watch):
+    fake.steps.append(Step("", "suspend", Phase.FREEZE, Tier.API, "Suspend", watch=WatchPolicy.REAPPLY))
+    fake.release = lambda a: "pw"
+    cli("press", "--user", "mail")
+    cli("release", "--user", "mail", answers=["y"])
+    cli("press", "--user", "mail")
+    results, conns, accounts, baselines, released = patch_watch.call_args.args[:5]
+    fake.state["mail/suspend"] = False
+    fake.ran.clear()
+    executor.watch_once(results, conns, accounts, baselines, released(), lambda e: None)
+    assert "mail/suspend" in fake.ran
+
+
+def test_a_second_press_keeps_the_first_record_and_report(armed, patch_watch, monkeypatch):
+    press_at(monkeypatch, time.time() - 7200)
+    cli("press", "--user", "mail")
+    first = latest_report()
+    text = first.read_text()
+    press_at(monkeypatch, time.time() - 3600)
+    cli("press", "--user", "bank")
+    d = open_vault()
+    assert len(d["outcomes"]) == 2 and d["outcomes"][0]["touched"].keys() == {"mail"}
+    assert len(reports()) == 2 and first.read_text() == text and latest_report() != first
+    assert stat.S_IMODE(latest_report().stat().st_mode) == 0o600
+
+
+def test_report_rerenders_the_latest_press_and_lists_earlier_ones(armed, patch_watch, monkeypatch, capsys):
+    press_at(monkeypatch, time.time() - 7200)
+    cli("press", "--user", "mail")
+    press_at(monkeypatch, time.time() - 3600)
+    cli("press", "--user", "bank")
+    first, second = reports()
+    second.unlink()
+    capsys.readouterr()
+    assert cli("report") == 0
+    out = capsys.readouterr().out
+    assert reports() == [first, second] and "re-openable from mail" in second.read_text()
+    assert f"Earlier reports: {first.name}" in out
+
+
+def test_watch_covers_recent_presses_and_the_later_result_wins(armed, patch_watch, monkeypatch):
+    fake.steps.append(Step("", "old", Phase.PURGE, Tier.API, "Old"))
+    press_at(monkeypatch, time.time() - 30 * 3600)  # outside the window
+    cli("press", "--user", "bank")
+    fake.steps.pop()
+    press_at(monkeypatch, time.time() - 7200)
+    cli("press", "--all")
+    fake.fail = {"mail/purge"}
+    press_at(monkeypatch, time.time() - 3600)
+    cli("press", "--user", "mail")
+    results = patch_watch.call_args.args[0]
+    assert {(r.step.account, r.step.action): r.status for r in results} == {
+        ("mail", "freeze"): Status.LOCKED, ("mail", "purge"): Status.STILL_OPEN,
+        ("bank", "freeze"): Status.LOCKED, ("bank", "purge"): Status.LOCKED}
+    assert 22.9 < patch_watch.call_args.kwargs["hours"] <= 23
+
+
+def test_progress_is_saved_before_the_walkthrough(armed, patch_watch):
+    fake.steps.append(Step("", "g", Phase.PURGE, Tier.GUIDED, "Guided"))
+    seen = []
+
+    def answers():  # runs at the first guided prompt, as if the process died there
+        seen.append((open_vault()["outcomes"][-1], reports()))
+        yield "y"
+
+    cli("press", "--user", "mail", answers=answers())
+    saved, files = seen[0]
+    assert [r["step"]["action"] for r in saved["results"]] == ["freeze", "purge"] and files
+    assert len(open_vault()["outcomes"]) == 1 and len(open_vault()["outcomes"][0]["results"]) == 3
+
+
+def test_one_user_press_reads_no_other_account(armed, patch_watch):
+    reads = []
+    snap, check = fake.snapshot, fake.check
+    fake.snapshot = lambda a: reads.append(a.id) or snap(a)
+    fake.check = lambda step, baseline: reads.append(step.account) or check(step, baseline)
+    cli("press", "--user", "bank")
+    assert reads and set(reads) == {"bank"}
+
+
+def test_removed_prints_one_accounts_items_unredacted(armed, patch_watch, capsys):
+    ws = _ws_armed(armed)
+    ws.snapshot = lambda a: {"filters": []} if "w@d.com/purge" in ws.ran else {"filters": ["from:x subject:secret"]}
+    conns = {"fake": fake, "google_workspace": ws}
+    cli("press", "--user", "w@d.com", connectors=conns)
+    capsys.readouterr()
+    assert cli("removed", "--user", "W@d.com", connectors=conns) == 0
+    out = capsys.readouterr().out
+    assert out.count("filters: from:x subject:secret") == 2  # removed, and outside the baseline
+    assert cli("removed", "--user", "boss") == 1 and cli("removed", "--user", "nobody") == 1

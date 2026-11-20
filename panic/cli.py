@@ -12,9 +12,10 @@ from pathlib import Path
 from panic import executor, google_personal, log, report, vault
 from panic.cli_arm import _plan_lines, cmd_arm, cmd_rehearse
 from panic.graph import lock_order, resetters
-from panic.model import Outcome, Step
-from panic.session import (CliError, Session, _connectors, _last_outcome, _private_write, _redact, _same_device,
-                           _unprotected, _warn, _yes, outcome_from_json, outcome_to_json)
+from panic.model import Outcome, Result, Step
+from panic.session import (CliError, Session, _connectors, _last_outcome, _outcomes, _private_write,
+                           _record_outcome, _redact, _same_device, _unprotected, _warn, _yes,
+                           outcome_from_json, outcome_to_json)
 from panic.vault import VaultError
 
 DEFAULT_VAULT = "~/.panic/panic.vault"
@@ -49,18 +50,36 @@ def cmd_map(a) -> int:
         print(f"Can reset the most: {lock_order(ids, s.edges)[0]}")
     return 0
 
+
 # -- press / watch / report ---------------------------------------------
 
-def _publish_report(s: Session, outcome: Outcome) -> None:
+def _report_path(s: Session, o: Outcome, ext: str) -> Path:
+    # Named by press start, so a later press never overwrites an earlier one's record.
+    return Path(f"{s.path}.report-{datetime.fromtimestamp(o.started_at, timezone.utc):%Y%m%dT%H%M%SZ}.{ext}")
+
+
+def _render(s: Session, outcome: Outcome) -> tuple[str, dict]:
     shown = replace(outcome, touched=_redact(outcome.touched, s.accounts), removed=_redact(outcome.removed, s.accounts))
-    md, data = report.render(shown, time.time())
+    return report.render(shown, time.time())
 
-    def write():
-        _private_write(Path(f"{s.path}.report.md"), md.encode())
-        _private_write(Path(f"{s.path}.report.json"), json.dumps(data, indent=2).encode())
 
-    _guard("write the report files", write)
+def _write_report(s: Session, outcome: Outcome, md: str, data: dict) -> None:
+    _private_write(_report_path(s, outcome, "md"), md.encode())
+    _private_write(_report_path(s, outcome, "json"), json.dumps(data, indent=2).encode())
+
+
+def _publish_report(s: Session, outcome: Outcome) -> None:
+    md, data = _render(s, outcome)
+    _guard("write the report files", lambda: _write_report(s, outcome, md, data))
     print(md)
+
+
+def _save_outcome(s: Session, outcome: Outcome) -> None:
+    def change(d: dict) -> None:
+        _record_outcome(d, outcome)
+        d["log_head"] = log.head(s.log_path)
+
+    s.update(change)
 
 
 def _confirm(step: Step) -> bool:
@@ -68,31 +87,42 @@ def _confirm(step: Step) -> bool:
     return _yes("Done?")
 
 
-def _watch(a, s: Session, outcome: Outcome, conns: dict) -> int:
-    hours = WATCH_HOURS - (time.time() - outcome.started_at) / 3600
+def _watch(a, s: Session, outcomes: list[Outcome], conns: dict) -> int:
+    now = time.time()
+    hours = WATCH_HOURS - (now - outcomes[-1].started_at) / 3600
     if hours <= 0:
         print("The 24-hour watch window has ended.")
         return 0
-    released = set(s.data.get("released", []))
+    latest: dict[tuple[str, str], Result] = {}  # a later press's result for the same step wins
+    for o in outcomes:
+        if now - o.started_at < WATCH_HOURS * 3600:
+            latest.update({(r.step.account, r.step.action): r for r in o.results})
+    released, baselines = set(s.data.get("released", [])), dict(s.data["baselines"])
 
     def reload() -> set[str]:
         nonlocal released
         try:
-            released = set(vault.load(s.path, s.passphrase, s.key).get("released", []))
+            fresh = vault.load(s.path, s.passphrase, s.key)
         except Exception:
-            pass  # keep the last set read
+            return released  # keep the last state read
+        released = set(fresh.get("released", []))
+        # Refreshed in place, so a reconnected token or an approved baseline applies from the next pass.
+        baselines.clear()
+        baselines.update(fresh["baselines"])
+        new = _connectors(a, fresh)
+        if new is not conns:
+            conns.clear()
+            conns.update(new)
         return released
 
     print(f"Watching for {hours:.1f} more hours. Press Ctrl-C to stop; resume with `panic watch`.")
     try:
-        executor.watch(outcome.results, conns, s.accounts, s.data["baselines"], reload, s.log, hours=hours)
+        executor.watch(list(latest.values()), conns, s.accounts, baselines, reload, s.log, hours=hours)
     except KeyboardInterrupt:
         print("Watch stopped. Resume with `panic watch`.")
     finally:  # watch entries moved the log head; keep report's tamper check honest
         try:
-            fresh = vault.load(s.path, s.passphrase, s.key)
-            fresh["log_head"] = log.head(s.log_path)
-            vault.save(s.path, fresh, s.passphrase, s.key)
+            s.update(lambda d: d.__setitem__("log_head", log.head(s.log_path)))
         except Exception as e:
             _warn(f"Warning: could not update the log checkpoint: {e}")
     return 0
@@ -112,7 +142,7 @@ def cmd_press(a) -> int:
     if saved and (datetime.now(timezone.utc) - saved).days > STALE_DAYS:
         _warn(f"Warning: this vault copy is over {STALE_DAYS} days old and may be stale; "
               "more may be removed than you expect.")
-    conns, accounts = _connectors(a, s), s.accounts
+    conns, accounts = _connectors(a, s.data), s.accounts
     plan = executor.compile_plan([x for x in accounts if x.id in targets], s.edges, conns)
     if a.dry_run:
         out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, lambda e: None, dry_run=True)
@@ -123,21 +153,26 @@ def cmd_press(a) -> int:
                 print(f"{acct}: outside the baseline:")
                 print("\n".join(f"  - {i}" for i in items))
         return 0
-    # press absorbs Ctrl-C and EOF, so everything below still runs after an interrupt.
-    out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, s.log, progress=_warn)
-    def save():
-        s.data["last_outcome"] = outcome_to_json(out)
-        s.data["log_head"] = log.head(s.log_path)
-        s.save()
+    if targets & set(s.data.get("released", [])):  # a new press puts suspension enforcement back
+        _guard("clear the released list", lambda: s.update(
+            lambda d: d.__setitem__("released", sorted(set(d.get("released", [])) - targets))))
 
-    _guard("save the outcome to the vault", save)
+    def checkpoint(o: Outcome) -> None:  # survives a process that dies during the walkthrough
+        _save_outcome(s, o)
+        _write_report(s, o, *_render(s, o))
+
+    # press absorbs Ctrl-C and EOF, so everything below still runs after an interrupt.
+    out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, s.log,
+                         progress=_warn, checkpoint=checkpoint)
+    _guard("save the outcome to the vault", lambda: _save_outcome(s, out))
     _publish_report(s, out)
-    return _watch(a, s, out, conns)
+    return _watch(a, s, [o for o in _outcomes(s) if o.started_at != out.started_at] + [out], conns)
 
 
 def cmd_watch(a) -> int:
     s = Session(a)
-    return _watch(a, s, _last_outcome(s), _connectors(a, s))
+    _last_outcome(s)  # one clear error when nothing was pressed
+    return _watch(a, s, _outcomes(s), _connectors(a, s.data))
 
 
 def cmd_report(a) -> int:
@@ -146,6 +181,27 @@ def cmd_report(a) -> int:
     if not log.verify(s.log_path) or log.head(s.log_path) != s.data.get("log_head", ""):
         _warn("Warning: the audit log has been changed since the last press.")
     _publish_report(s, outcome)
+    own = _report_path(s, outcome, "md")
+    earlier = sorted(p.name for p in s.path.parent.glob(f"{s.path.name}.report-*.md") if p != own)
+    if earlier:
+        print("Earlier reports: " + ", ".join(earlier))
+    return 0
+
+
+def cmd_removed(a) -> int:
+    s = Session(a)
+    uid = a.user.lower()
+    if uid not in _unprotected(s):
+        raise CliError(f"Not a valid account: {uid}. Valid ids: {', '.join(_unprotected(s)) or 'none'}.")
+    o = next((o for o in reversed(_outcomes(s)) if uid in o.removed or uid in o.touched), None)
+    if o is None:
+        raise CliError(f"No press has recorded anything for {uid}.")
+    # Unredacted on purpose: this is how an admin hands a user back their own deleted settings.
+    print(f"{uid}, press of {datetime.fromtimestamp(o.started_at, timezone.utc):%Y-%m-%dT%H:%MZ}")
+    for title, items in (("Removed by the press", o.removed.get(uid, [])),
+                         ("Attacker may have touched", o.touched.get(uid, []))):
+        print(f"{title}:")
+        print("\n".join(f"  - {i}" for i in items) or "  Nothing.")
     return 0
 
 
@@ -157,7 +213,7 @@ def cmd_release(a) -> int:
     acct = next((x for x in s.accounts if x.id == uid and not x.protected), None)
     if acct is None:
         raise CliError(f"Not a valid account: {uid}. Valid ids: {', '.join(_unprotected(s)) or 'none'}.")
-    conn = _connectors(a, s).get(acct.provider)
+    conn = _connectors(a, s.data).get(acct.provider)
     if not hasattr(conn, "release"):
         raise CliError(f"{acct.provider} accounts cannot be released by this tool.")
     if not _yes(f"Release {uid}? This unsuspends it and sets a temporary password."):
@@ -167,8 +223,7 @@ def cmd_release(a) -> int:
         pw = conn.release(acct)
     except Exception as e:
         raise CliError(f"could not release {uid}: {e}")
-    s.data["released"] = sorted({*s.data.get("released", []), uid})
-    s.save()
+    s.update(lambda d: d.__setitem__("released", sorted({*d.get("released", []), uid})))
     print(f"Released {uid}. Temporary password (shown once): {pw}")
     return 0
 
@@ -222,6 +277,8 @@ def _parser() -> argparse.ArgumentParser:
     rel = add("release", cmd_release, "Unsuspend one account with a temporary password.")
     rel.add_argument("--user", required=True, metavar="ID")
     add("report", cmd_report, "Show the report from the last press at the current time.")
+    rem = add("removed", cmd_removed, "Print everything the last press removed from one account, unredacted.")
+    rem.add_argument("--user", required=True, metavar="ID")
     exp = add("export", cmd_export, "Copy the vault file to DEST (a second device).")
     exp.add_argument("dest", metavar="DEST")
     return p

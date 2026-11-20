@@ -3,6 +3,7 @@ import getpass
 import json
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
@@ -95,7 +96,18 @@ class Session:
     def edges(self) -> list[tuple[str, str]]:
         return [tuple(e) for e in self.data["edges"]]
 
-    def save(self) -> None:
+    def update(self, change: Callable[[dict], None]) -> None:
+        """Reload, apply this writer's change, save: keys another process saved meanwhile survive."""
+        if self.new:
+            change(self.data)
+            self._create()
+            return
+        fresh = vault.load(self.path, self.passphrase, self.key)
+        change(fresh)
+        vault.save(self.path, fresh, self.passphrase, self.key)
+        self.data = fresh
+
+    def _create(self) -> None:
         if self.new:
             self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.new_key:  # before the vault: a vault without its key file is unopenable
@@ -112,17 +124,18 @@ class Session:
             _private_write(self.log_path, b"")
         log.append(self.log_path, entry)
 
-    def upsert(self, account: Account, snap: dict | None) -> None:
-        self.data["accounts"] = [x for x in self.data["accounts"] if x["id"] != account.id] + [asdict(account)]
-        if snap is not None:
-            self.data["baselines"][account.id] = snap
+
+def _upsert(d: dict, account: Account, snap: dict | None) -> None:
+    d["accounts"] = [x for x in d["accounts"] if x["id"] != account.id] + [asdict(account)]
+    if snap is not None:
+        d["baselines"][account.id] = snap
 
 
-def _connectors(a, s: Session) -> dict:
+def _connectors(a, data: dict) -> dict:
     if a.connectors is not None:
         return a.connectors
     from panic.google_workspace import Workspace
-    cred, out = s.data["credentials"], {}
+    cred, out = data["credentials"], {}
     if "google_personal" in cred:
         out["google_personal"] = google_personal.Personal(cred["google_personal"])
     if "google_workspace" in cred:
@@ -148,7 +161,21 @@ def outcome_from_json(d: dict) -> Outcome:
     return Outcome(results, d["touched"], d["started_at"], d.get("removed", {}))
 
 
+def _outcomes(s: Session) -> list[Outcome]:
+    return [outcome_from_json(x) for x in s.data.get("outcomes", [])]
+
+
 def _last_outcome(s: Session) -> Outcome:
-    if "last_outcome" not in s.data:
+    if not s.data.get("outcomes"):
         raise CliError("No press has been recorded yet. Run `panic press` first.")
-    return outcome_from_json(s.data["last_outcome"])
+    return _outcomes(s)[-1]
+
+
+def _record_outcome(d: dict, o: Outcome) -> None:
+    """Adds a press to the vault's list, or replaces its own earlier checkpoint."""
+    entry, rest = outcome_to_json(o), d.setdefault("outcomes", [])
+    j = next((k for k, x in enumerate(rest) if x["started_at"] == o.started_at), None)
+    if j is None:
+        rest.append(entry)
+    else:
+        rest[j] = entry
