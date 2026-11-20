@@ -645,20 +645,21 @@ def test_report_rerenders_the_latest_press_and_lists_earlier_ones(armed, patch_w
     assert f"Earlier reports: {first.name}" in out
 
 
-def test_watch_covers_recent_presses_and_the_later_result_wins(armed, patch_watch, monkeypatch):
+def test_watch_covers_recent_presses_and_a_later_failure_keeps_the_earlier_lock(armed, patch_watch, monkeypatch):
     fake.steps.append(Step("", "old", Phase.PURGE, Tier.API, "Old"))
     press_at(monkeypatch, time.time() - 30 * 3600)  # outside the window
     cli("press", "--user", "bank")
     fake.steps.pop()
-    press_at(monkeypatch, time.time() - 7200)
+    early, late = time.time() - 7200, time.time() - 3600
+    press_at(monkeypatch, early)
     cli("press", "--all")
     fake.fail = {"mail/purge"}
-    press_at(monkeypatch, time.time() - 3600)
+    press_at(monkeypatch, late)
     cli("press", "--user", "mail")
     results = patch_watch.call_args.args[0]
-    assert {(r.step.account, r.step.action): r.status for r in results} == {
-        ("mail", "freeze"): Status.LOCKED, ("mail", "purge"): Status.STILL_OPEN,
-        ("bank", "freeze"): Status.LOCKED, ("bank", "purge"): Status.LOCKED}
+    assert {(r.step.account, r.step.action): (r.status, r.at) for r in results} == {
+        ("mail", "freeze"): (Status.LOCKED, late), ("mail", "purge"): (Status.LOCKED, early),
+        ("bank", "freeze"): (Status.LOCKED, early), ("bank", "purge"): (Status.LOCKED, early)}
     assert 22.9 < patch_watch.call_args.kwargs["hours"] <= 23
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from panic import executor, google_personal, log, report, vault
 from panic.cli_arm import _plan_lines, cmd_arm, cmd_rehearse
 from panic.graph import lock_order, resetters
-from panic.model import Outcome, Result, Step
+from panic.model import Outcome, Result, Status, Step
 from panic.session import (CliError, Session, _connectors, _last_outcome, _outcomes, _private_write,
                            _record_outcome, _redact, _same_device, _unprotected, _warn, _yes,
                            outcome_from_json, outcome_to_json)
@@ -98,10 +98,13 @@ def _watch(a, s: Session, outcomes: list[Outcome], conns: dict) -> int:
     if hours <= 0:
         print("The 24-hour watch window has ended.")
         return 0
-    latest: dict[tuple[str, str], Result] = {}  # a later press's result for the same step wins
+    latest: dict[tuple[str, str], Result] = {}  # a later press's result wins, unless it would unwatch a lock
     for o in outcomes:
         if now - o.started_at < WATCH_HOURS * 3600:
-            latest.update({(r.step.account, r.step.action): r for r in o.results})
+            for r in o.results:
+                k = (r.step.account, r.step.action)
+                if r.status is Status.LOCKED or k not in latest or latest[k].status is not Status.LOCKED:
+                    latest[k] = r
     released, baselines = set(s.data.get("released", [])), dict(s.data["baselines"])
 
     def reload() -> set[str]:
