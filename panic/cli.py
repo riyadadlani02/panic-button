@@ -193,15 +193,17 @@ def cmd_removed(a) -> int:
     uid = a.user.lower()
     if uid not in _unprotected(s):
         raise CliError(f"Not a valid account: {uid}. Valid ids: {', '.join(_unprotected(s)) or 'none'}.")
-    o = next((o for o in reversed(_outcomes(s)) if uid in o.removed or uid in o.touched), None)
-    if o is None:
+    # Every press, newest first: a re-press reads after the first one already removed things.
+    shown = [o for o in reversed(_outcomes(s)) if o.removed.get(uid) or o.touched.get(uid)]
+    if not shown:
         raise CliError(f"No press has recorded anything for {uid}.")
     # Unredacted on purpose: this is how an admin hands a user back their own deleted settings.
-    print(f"{uid}, press of {datetime.fromtimestamp(o.started_at, timezone.utc):%Y-%m-%dT%H:%MZ}")
-    for title, items in (("Removed by the press", o.removed.get(uid, [])),
-                         ("Attacker may have touched", o.touched.get(uid, []))):
-        print(f"{title}:")
-        print("\n".join(f"  - {i}" for i in items) or "  Nothing.")
+    for o in shown:
+        print(f"{uid}, press of {datetime.fromtimestamp(o.started_at, timezone.utc):%Y-%m-%dT%H:%MZ}")
+        for title, items in (("Removed by the press", o.removed.get(uid, [])),
+                             ("Attacker may have touched", o.touched.get(uid, []))):
+            print(f"{title}:")
+            print("\n".join(f"  - {i}" for i in items) or "  Nothing.")
     return 0
 
 

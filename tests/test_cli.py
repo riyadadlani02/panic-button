@@ -776,3 +776,18 @@ def test_outcome_without_after_read_still_loads():
     d = outcome_to_json(Outcome([Result(st, Status.LOCKED)], {}, 1.0))
     del d["results"][0]["step"]["after_read"]
     assert outcome_from_json(d).results[0].step.after_read is False
+
+
+def test_removed_still_prints_an_earlier_press_after_a_re_press(armed, patch_watch, monkeypatch, capsys):
+    fake.snapshot = lambda a: {} if "mail/purge" in fake.ran else {"filters": ["evil"]}
+    first = time.time() - 7200
+    press_at(monkeypatch, first)
+    cli("press", "--user", "mail")
+    press_at(monkeypatch, time.time() - 3600)
+    cli("press", "--user", "mail")
+    capsys.readouterr()
+    assert cli("removed", "--user", "mail") == 0
+    out = capsys.readouterr().out
+    assert f"press of {time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(first))}" in out
+    assert out.count("filters: evil") == 2 and out.count("press of") == 1
+    assert cli("removed", "--user", "bank") == 1
