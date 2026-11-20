@@ -33,6 +33,8 @@ def _derive(passphrase: str, keyfile: bytes, salt: bytes) -> bytes:
 
 
 def save(path: Path, data: dict, passphrase: str, keyfile: bytes) -> None:
+    if len(keyfile) != 32:
+        raise ValueError("Key file must be exactly 32 bytes.")
     data["version"] = data.get("version", 0) + 1
     data["saved_at"] = datetime.now(timezone.utc).isoformat()
     salt, nonce = secrets.token_bytes(16), secrets.token_bytes(12)
@@ -49,6 +51,8 @@ def save(path: Path, data: dict, passphrase: str, keyfile: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(header + b"\n" + body)
+            f.flush()
+            os.fsync(f.fileno())  # rename must not outlive unwritten data
         os.replace(tmp, path)
     except BaseException:
         os.unlink(tmp)
@@ -56,8 +60,11 @@ def save(path: Path, data: dict, passphrase: str, keyfile: bytes) -> None:
 
 
 def load(path: Path, passphrase: str, keyfile: bytes) -> dict:
+    raw = Path(path).read_bytes()  # I/O errors propagate; not a bad-credentials case
+    if len(keyfile) != 32:
+        raise VaultError(_OPEN_FAILED)
     try:
-        header, body = Path(path).read_bytes().split(b"\n", 1)
+        header, body = raw.split(b"\n", 1)
         meta = json.loads(header)
         salt = base64.b64decode(meta["salt"], validate=True)
         nonce = base64.b64decode(meta["nonce"], validate=True)
