@@ -6,7 +6,7 @@ import os
 import shutil
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,6 +49,28 @@ def _private_write(path: Path, data: bytes, exclusive: bool = False) -> None:
         f.write(data)
 
 
+def _guard(what: str, fn) -> None:
+    """Run one post-press step; a failure is one warning and never hides the report."""
+    try:
+        fn()
+    except (Exception, KeyboardInterrupt) as e:
+        _warn(f"Warning: could not {what}: {e or type(e).__name__}")
+
+
+def _redact(touched: dict, accounts: list[Account]) -> dict:
+    """Org policy: an admin never reads a staff member's filter contents."""
+    ws = {a.id for a in accounts if a.provider == "google_workspace"}
+    out = {}
+    for acct, items in touched.items():
+        if acct in ws:
+            hidden = [i for i in items if i.startswith("filters:")]
+            items = [i for i in items if not i.startswith("filters:")]
+            if hidden:
+                items.append(f"filters: {len(hidden)} not in baseline (contents withheld)")
+        out[acct] = items
+    return out
+
+
 def _dev(path: Path) -> int:
     return (path if path.exists() else path.parent).stat().st_dev
 
@@ -79,6 +101,8 @@ class Session:
             self.new = True
             self.new_key = not self.keypath.exists()
             self.key = vault.new_keyfile() if self.new_key else self.keypath.read_bytes()
+            if len(self.key) != 32:
+                raise CliError(f"{self.keypath} is not a valid key file (expected 32 bytes).")
             self.passphrase = getpass.getpass("Choose a passphrase: ")
             if not self.passphrase:
                 raise CliError("The passphrase must not be empty.")
@@ -157,6 +181,13 @@ def _last_outcome(s: Session) -> Outcome:
 
 # -- arm ----------------------------------------------------------------
 
+def _authorize(a) -> dict:
+    try:
+        return a.authorize(Path(a.client_secrets))
+    except Exception as e:
+        raise CliError(f"sign-in failed: {e}")
+
+
 def _print_snapshot(snap: dict) -> None:
     for cat, items in snap.items():
         print(f"{cat}:")
@@ -172,7 +203,7 @@ def _arm_personal(a) -> int:
         s = Session(a)
         if not any(x.id == email and x.provider == "google_personal" for x in s.accounts):
             raise CliError(f"{email} is not armed. Arm it first, without --reconnect.")
-        s.data["credentials"].setdefault("google_personal", {})[email] = a.authorize(Path(a.client_secrets))
+        s.data["credentials"].setdefault("google_personal", {})[email] = _authorize(a)
         s.save()
         print(f"Reconnected {email}.")
         return 0
@@ -181,10 +212,13 @@ def _arm_personal(a) -> int:
         _warn(f"Not armed: set up a recovery method for {email} that does not depend on it, then arm again.")
         return 1
     s = Session(a, create=True)
-    token = a.authorize(Path(a.client_secrets))
+    existing = next((x for x in s.accounts if x.id == email), None)
+    if existing and (existing.protected or existing.provider != "google_personal"):
+        raise CliError(f"{email} is already armed ({"protected, " if existing.protected else ""}{existing.provider}); refusing to replace it.")
+    token = _authorize(a)
     account = Account(email, "google_personal")
-    conn = (a.connectors or {}).get("google_personal") or google_personal.Personal({email: token})
     try:
+        conn = (a.connectors or {}).get("google_personal") or google_personal.Personal({email: token})
         snap = conn.snapshot(account)
     except Exception as e:
         raise CliError(f"could not read {email}: {e}")
@@ -214,14 +248,23 @@ def _arm_workspace(a) -> int:
     if not (a.sa_key and a.admin and a.domain):
         raise CliError("--workspace needs --sa-key FILE, --admin EMAIL and --domain DOMAIN.")
     from panic.google_workspace import Workspace
-    sa_info = json.loads(Path(a.sa_key).expanduser().read_text())
+    try:
+        sa_info = json.loads(Path(a.sa_key).expanduser().read_text())
+    except (OSError, ValueError) as e:
+        raise CliError(f"could not read the service-account key {a.sa_key}: {e}")
     admin = a.admin.lower()
     s = Session(a, create=True)
-    ws = (a.connectors or {}).get("google_workspace") or Workspace(sa_info, admin, a.domain)
-    users = list(dict.fromkeys([u.lower() for u in ws.users()] + [admin]))
+    prior = {x.id: x for x in s.accounts}
+    if admin in prior and prior[admin].provider != "google_workspace":
+        raise CliError(f"{admin} is already armed as a {prior[admin].provider} account; refusing to replace it.")
+    try:
+        ws = (a.connectors or {}).get("google_workspace") or Workspace(sa_info, admin, a.domain)
+        users = list(dict.fromkeys([u.lower() for u in ws.users()] + [admin]))
+    except Exception as e:
+        raise CliError(f"could not list the Workspace users: {e}")
     failed: list[str] = []
     for u in users:
-        acct = Account(u, "google_workspace", protected=(u == admin))
+        acct = Account(u, "google_workspace", protected=(u == admin or (u in prior and prior[u].protected)))
         snap = None
         if not acct.protected:  # the break-glass admin is never read either
             try:
@@ -270,7 +313,7 @@ def _plan_lines(plan: list[Step]) -> list[str]:
 
 def cmd_rehearse(a) -> int:
     s = Session(a)
-    conns, bad = _connectors(a, s), False
+    conns, bad, changed = _connectors(a, s), False, False
     base = s.data["baselines"]
     for acct in s.accounts:
         conn = conns.get(acct.provider)
@@ -293,19 +336,26 @@ def cmd_rehearse(a) -> int:
             print("\n".join(f"  - {o}" for o in out))
             if _yes(f"Approve this as the new baseline for {acct.id}?"):
                 base[acct.id] = snap
+                changed = True
     print("Plan:")
     print("\n".join(_plan_lines(executor.compile_plan(s.accounts, s.edges, conns))) or "  (no steps)")
-    s.save()
+    if changed:  # an unchanged rehearsal must not reset saved_at on an exported copy
+        s.save()
     return 1 if bad else 0
 
 
 # -- press / watch / report ---------------------------------------------
 
-def _write_report(s: Session, outcome: Outcome) -> str:
-    md, data = report.render(outcome, time.time())
-    _private_write(Path(f"{s.path}.report.md"), md.encode())
-    _private_write(Path(f"{s.path}.report.json"), json.dumps(data, indent=2).encode())
-    return md
+def _publish_report(s: Session, outcome: Outcome) -> None:
+    shown = replace(outcome, touched=_redact(outcome.touched, s.accounts))
+    md, data = report.render(shown, time.time())
+
+    def write():
+        _private_write(Path(f"{s.path}.report.md"), md.encode())
+        _private_write(Path(f"{s.path}.report.json"), json.dumps(data, indent=2).encode())
+
+    _guard("write the report files", write)
+    print(md)
 
 
 def _confirm(step: Step) -> bool:
@@ -363,17 +413,20 @@ def cmd_press(a) -> int:
         out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, lambda e: None, dry_run=True)
         print("Dry run: nothing was changed. The press would run:")
         print("\n".join(_plan_lines(plan)) or "  (no steps)")
-        for acct, items in out.touched.items():
+        for acct, items in _redact(out.touched, accounts).items():
             if items:
                 print(f"{acct}: outside the baseline:")
                 print("\n".join(f"  - {i}" for i in items))
         return 0
     # press absorbs Ctrl-C and EOF, so everything below still runs after an interrupt.
     out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, s.log)
-    s.data["last_outcome"] = outcome_to_json(out)
-    s.data["log_head"] = log.head(s.log_path)
-    s.save()
-    print(_write_report(s, out))
+    def save():
+        s.data["last_outcome"] = outcome_to_json(out)
+        s.data["log_head"] = log.head(s.log_path)
+        s.save()
+
+    _guard("save the outcome to the vault", save)
+    _publish_report(s, out)
     return _watch(a, s, out, conns)
 
 
@@ -387,7 +440,7 @@ def cmd_report(a) -> int:
     outcome = _last_outcome(s)
     if not log.verify(s.log_path) or log.head(s.log_path) != s.data.get("log_head", ""):
         _warn("Warning: the audit log has been changed since the last press.")
-    print(_write_report(s, outcome))
+    _publish_report(s, outcome)
     return 0
 
 

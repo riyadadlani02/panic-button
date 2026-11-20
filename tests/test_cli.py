@@ -378,3 +378,115 @@ def test_rehearse_approved_change_replaces_baseline_and_prints_plan(armed, capsy
     d = open_vault()["baselines"]
     assert d["mail"] == {"filters": ["ok"]} and d["bank"] == {}
     assert "mail: Freeze" in capsys.readouterr().out
+
+
+# -- review fixes --------------------------------------------------------
+
+def test_report_still_printed_when_vault_save_fails(armed, patch_watch, monkeypatch, capsys):
+    real = vault.save
+    monkeypatch.setattr("panic.cli.vault.save", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    assert cli("press", "--all") == 0
+    cap = capsys.readouterr()
+    assert "## Locked" in cap.out and "disk full" in cap.err and patch_watch.called
+    monkeypatch.setattr("panic.cli.vault.save", real)
+
+
+def test_report_still_printed_when_report_write_fails(armed, patch_watch, monkeypatch, capsys):
+    def boom(path, data, exclusive=False):
+        raise OSError("read-only")
+    monkeypatch.setattr("panic.cli._private_write", boom)
+    assert cli("press", "--all") == 0
+    cap = capsys.readouterr()
+    assert "## Locked" in cap.out and "read-only" in cap.err and "last_outcome" in open_vault()
+
+
+def test_personal_arm_cannot_replace_protected_account(armed, capsys):
+    before = vpath.read_bytes()
+    calls = []
+    rc = cli("arm", "--personal", "boss", "--client-secrets", "c", answers=["y"],
+             connectors={"google_personal": FakeConnector(provider="google_personal")},
+             authorize=lambda p: calls.append(p))
+    assert rc == 1 and calls == [] and vpath.read_bytes() == before
+    assert sum(l.startswith("error:") for l in capsys.readouterr().err.splitlines()) == 1
+
+
+def test_personal_arm_cannot_change_a_provider(armed):
+    before = vpath.read_bytes()
+    assert cli("arm", "--personal", "mail", "--client-secrets", "c", answers=["y"],
+               authorize=lambda p: {}) == 1 and vpath.read_bytes() == before
+
+
+def test_workspace_arm_refuses_admin_armed_as_other_provider(armed):
+    (bare_dir := vpath.parent / "sa.json").write_text("{}")
+    before = vpath.read_bytes()
+    ws = FakeWorkspace(["boss"], {})
+    assert cli("arm", "--workspace", "--sa-key", str(bare_dir), "--admin", "mail", "--domain", "d",
+               connectors={"google_workspace": ws}) == 1 and vpath.read_bytes() == before
+
+
+def test_workspace_arm_keeps_existing_protected_flag(armed):
+    (sa := vpath.parent / "sa.json").write_text("{}")
+    d = open_vault()
+    d["accounts"].append({"id": "old@d.com", "provider": "google_workspace", "protected": True})
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    ws = FakeWorkspace(["old@d.com", "adm@d.com"], {"old@d.com": {}})
+    assert cli("arm", "--workspace", "--sa-key", str(sa), "--admin", "adm@d.com", "--domain", "d.com",
+               connectors={"google_workspace": ws}) == 0
+    assert {a["id"]: a["protected"] for a in open_vault()["accounts"]}["old@d.com"] is True
+
+
+def test_malformed_sa_key_is_one_line(bare, capsys):
+    (sa := bare / "sa.json").write_text("{not json")
+    assert cli("arm", "--workspace", "--sa-key", str(sa), "--admin", "a@d.com", "--domain", "d.com") == 1
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and "service-account key" in err[0] and not vpath.exists()
+
+
+def test_failing_workspace_listing_is_one_line(bare, capsys):
+    (sa := bare / "sa.json").write_text("{}")
+    ws = FakeWorkspace([], {})
+    ws.users = lambda: (_ for _ in ()).throw(RuntimeError("delegation missing"))
+    assert cli("arm", "--workspace", "--sa-key", str(sa), "--admin", "a@d.com", "--domain", "d.com",
+               connectors={"google_workspace": ws}) == 1
+    assert "delegation missing" in capsys.readouterr().err and not vpath.exists()
+
+
+def test_failing_sign_in_is_one_line(bare, capsys):
+    def authorize(p):
+        raise RuntimeError("consent denied")
+    rc = cli("arm", "--personal", "x@y.z", "--client-secrets", "c", answers=["y"], authorize=authorize)
+    err = capsys.readouterr().err.strip().splitlines()
+    assert rc == 1 and len(err) == 1 and "consent denied" in err[0] and not vpath.exists()
+
+
+def test_wrong_length_existing_keyfile_is_one_line(bare, capsys):
+    kpath.write_bytes(b"short")
+    assert cli("arm", "--personal", "x@y.z", "--client-secrets", "c", answers=["y"], authorize=lambda p: {}) == 1
+    assert "key file" in capsys.readouterr().err and not vpath.exists()
+
+
+def _ws_armed(armed):
+    d = open_vault()
+    d["accounts"].append({"id": "w@d.com", "provider": "google_workspace", "protected": False})
+    d["baselines"]["w@d.com"] = {}
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    return FakeWorkspace([], {"w@d.com": {"filters": ["from:x subject:secret", "b"], "forwarding": ["f@x.com"]}})
+
+
+def test_workspace_filter_contents_are_withheld_in_dry_run_and_report(armed, patch_watch, capsys):
+    ws = _ws_armed(armed)
+    ws.snap = ws.snaps["w@d.com"]
+    ws.snapshot = lambda a: ws.snaps[a.id]
+    conns = {"fake": fake, "google_workspace": ws}
+    cli("press", "--all", "--dry-run", connectors=conns)
+    out = capsys.readouterr().out
+    assert "filters: 2 not in baseline (contents withheld)" in out and "secret" not in out and "forwarding: f@x.com" in out
+    cli("press", "--all", connectors=conns)
+    out = capsys.readouterr().out
+    assert "contents withheld" in out and "secret" not in out and "secret" not in report_path.read_text()
+    assert "secret" in json.dumps(open_vault()["last_outcome"])
+
+
+def test_rehearse_without_approved_change_does_not_resave_vault(armed):
+    before = vpath.read_bytes()
+    assert cli("rehearse") == 0 and vpath.read_bytes() == before

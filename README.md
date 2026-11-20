@@ -6,9 +6,9 @@ One command that stops an attacker in your connected accounts, root account firs
 
 1. Everything a provider lets software revoke is revoked and then read back to prove it, root account first.
 2. Anything that cannot be revoked is listed by name with when it expires. Unknown counts as open; the report never says "safe" by default.
-3. For 24 hours afterwards the tool keeps checking and undoes anything the attacker re-adds.
+3. For 24 hours afterwards, while `panic press` or `panic watch` keeps running, the tool re-checks the settings the API can read and puts back those it can change (filters and IMAP/POP; for Workspace also suspension, forwarding, delegates and recovery details). Other changes are reported, not undone.
 4. The tool itself is not a master key: a stolen laptop or a stolen vault file opens nothing, because opening needs both your passphrase and a separate key file.
-5. A lockdown never costs you your account: arming needs a recovery path you control, the break-glass admin is never touched, and no password is changed by API in personal mode.
+5. A lockdown never costs you your account: for personal accounts arming asks you to confirm a recovery path you control; Workspace relies on the named break-glass admin, which no command will act on. No password is changed by API in personal mode.
 
 ## What it does not promise
 
@@ -17,6 +17,8 @@ One command that stops an attacker in your connected accounts, root account firs
 - Personal Gmail has no API for sign-out, connected apps, forwarding or password change, so those are guided steps you confirm by hand.
 - The Workspace connector has been tested against mocked responses only.
 - The nine personal-account guided links are unverified until the live check.
+- The watch stops when the process stops.
+- On a personal account, sign-out, connected apps, app passwords, delegates, recovery and password are not watched, and forwarding is reported, not undone.
 - It does not detect the hack, clean malware, or read mail content.
 
 Measured freeze time: Not yet measured; recorded during the live check.
@@ -33,7 +35,7 @@ panic --keyfile ~/panic.key arm --personal you@gmail.com --client-secrets client
 
 The tool asks for a passphrase, creates the vault and the key file, shows you the account's current filters, forwarding and IMAP/POP state, and asks you to approve that as the baseline. Then it asks which of your other armed accounts can reset this one.
 
-The last guided step of a press is changing your password, which disconnects the tool. Straight after, run:
+Changing your password is the last step for each account, and it disconnects the tool. Straight after, run:
 
 ```
 panic arm --personal you@gmail.com --reconnect --client-secrets client.json
