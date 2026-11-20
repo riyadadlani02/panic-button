@@ -89,3 +89,32 @@ def test_catalog_titles_and_scope():
     assert step(conn, "revoke_apps").title == "Remove every connected app except panic-button."
     assert step(conn, "password").title.startswith("Change your password now. This disconnects panic-button;")
     assert google_personal.SCOPES == ["https://www.googleapis.com/auth/gmail.settings.basic"]
+
+
+def test_missing_filters_baseline_deletes_nothing_and_raises():
+    conn, svc = make([{"id": "f1", **F1}])
+    for call in (conn.run, conn.check):
+        with pytest.raises(KeyError, match="no baseline recorded for filters"):
+            call(step(conn, "filters"), {})
+    assert not svc.users().settings().filters().delete.called
+
+
+def test_explicit_empty_baseline_deletes_listed_filters():
+    conn, svc = make([{"id": "f1", **F1}])
+    conn.run(step(conn, "filters"), {"filters": []})
+    svc.users().settings().filters().delete.assert_called_once_with(userId="me", id="f1")
+
+
+def test_reordered_label_lists_are_the_same_filter():
+    f = {"criteria": {"from": "a@x"}, "action": {"addLabelIds": ["A", "B"], "removeLabelIds": ["X", "Y"]}}
+    flipped = {"criteria": f["criteria"], "action": {"addLabelIds": ["B", "A"], "removeLabelIds": ["Y", "X"]}}
+    conn, svc = make([{"id": "f1", **flipped}])
+    conn.run(step(conn, "filters"), {"filters": [json.dumps(f, sort_keys=True).replace('["A", "B"]', '["A", "B"]')]})
+    assert not svc.users().settings().filters().delete.called
+
+
+def test_incomplete_imap_pop_response_fails_closed():
+    conn, svc = make()
+    svc.users().settings().getImap().execute.return_value = {}
+    with pytest.raises(KeyError):
+        conn.check(step(conn, "imap_pop"), {})

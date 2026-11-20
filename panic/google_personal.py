@@ -66,6 +66,13 @@ class Personal:
         svc = self._svc(account.id)
         return {"filters": gs.filters(svc), "forwarding": gs.forwarding(svc), "imap_pop": gs.imap_pop(svc)}
 
+    @staticmethod
+    def _known_filters(step: Step, baseline: Snapshot) -> list[str]:
+        # A missing key must never mean "keep nothing": that would delete every filter.
+        if "filters" not in baseline:
+            raise KeyError(f"no baseline recorded for filters on {step.account}")
+        return baseline["filters"]
+
     def run(self, step: Step, baseline: Snapshot) -> None:
         if _TIER[step.action] is Tier.GUIDED:
             raise NotImplementedError(f"{step.action} is a guided step")
@@ -73,7 +80,7 @@ class Personal:
         if step.action == "imap_pop":
             gs.disable_imap_pop(svc)
         else:
-            gs.delete_filters_outside(svc, baseline.get("filters", []))
+            gs.delete_filters_outside(svc, self._known_filters(step, baseline))
 
     def check(self, step: Step, baseline: Snapshot) -> bool | None:
         if step.action == "imap_pop":
@@ -81,5 +88,6 @@ class Personal:
         if step.action == "forwarding_off":
             return gs.forwarding(self._svc(step.account)) == []
         if step.action == "filters":
-            return all(f in baseline.get("filters", []) for f in gs.filters(self._svc(step.account)))
+            keep = self._known_filters(step, baseline)
+            return all(f in keep for f in gs.filters(self._svc(step.account)))
         return None

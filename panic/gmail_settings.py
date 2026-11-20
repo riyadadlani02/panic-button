@@ -7,7 +7,9 @@ def _s(svc):
 
 
 def _canon(f: dict) -> str:  # id excluded: Gmail may reissue ids for the same filter
-    return json.dumps({"criteria": f.get("criteria", {}), "action": f.get("action", {})}, sort_keys=True)
+    def norm(d):  # list order is not meaningful, Gmail may reorder it
+        return {k: sorted(v) if isinstance(v, list) else v for k, v in d.items()}
+    return json.dumps({"criteria": norm(f.get("criteria", {})), "action": norm(f.get("action", {}))}, sort_keys=True)
 
 
 def _list(svc) -> list[dict]:
@@ -31,9 +33,10 @@ def forwarding(svc) -> list[str]:
 
 def imap_pop(svc) -> list[str]:
     on = []
-    if _s(svc).getImap(userId="me").execute().get("enabled"):
+    # Fail closed: a missing field must not read as "off".
+    if _s(svc).getImap(userId="me").execute()["enabled"]:
         on.append("imap")
-    if _s(svc).getPop(userId="me").execute().get("accessWindow", "disabled") != "disabled":
+    if _s(svc).getPop(userId="me").execute()["accessWindow"] != "disabled":
         on.append("pop")
     return on
 
