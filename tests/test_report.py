@@ -38,7 +38,7 @@ def test_lingering_access_is_listed_as_open_until_it_expires():
 
 def test_no_safe_claim_and_empty_sections_say_nothing():
     md, _ = report.render(Outcome([], {"mail": ["unknown: could not read (x)"]}, 0.0), now=1.0)
-    assert "unknown" in md and "safe" not in md.lower() and md.count("Nothing.") == 3
+    assert "unknown" in md and "safe" not in md.lower() and md.count("Nothing.") == 4
 
 
 def test_freeze_time_is_measured():
@@ -77,3 +77,11 @@ def test_lingering_line_carries_utc_time():
     r = Result(Step("mail", "s", Phase.FREEZE, Tier.API, "Sign out", lingers_s=3600), Status.LOCKED, Evidence.ACCEPTED, at=0.0)
     md, _ = report.render(Outcome([r], {}, 0.0), now=10.0)
     assert "may keep working until 1970-01-01T01:00Z" in md
+
+
+def test_removed_section_follows_touched():
+    md, data = report.render(Outcome([], {"mail": ["filters: a"]}, 0.0, {"mail": ["apps: x"], "bank": []}), now=1.0)
+    assert md.index("## Attacker may have touched") < md.index("## Removed by this press") < md.index("apps: x")
+    assert data["removed"] == {"mail": ["apps: x"], "bank": []}
+    md, _ = report.render(Outcome([], {}, 0.0), now=1.0)
+    assert md.split("## Removed by this press")[1].strip() == "Nothing."

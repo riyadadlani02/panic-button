@@ -145,7 +145,7 @@ def outcome_from_json(d: dict) -> Outcome:
 
     results = [Result(step(r["step"]), Status(r["status"]), Evidence(r["evidence"]) if r["evidence"] else None,
                       r["detail"], r["at"]) for r in d["results"]]
-    return Outcome(results, d["touched"], d["started_at"])
+    return Outcome(results, d["touched"], d["started_at"], d.get("removed", {}))
 
 
 def _last_outcome(s: Session) -> Outcome:

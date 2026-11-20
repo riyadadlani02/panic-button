@@ -1,7 +1,7 @@
 """Connector contract, plan compilation, the press that runs a plan and records evidence, and the watch that keeps it locked."""
 import time
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed, wait
 from typing import Protocol
 
 from panic.graph import lock_order, resetters
@@ -33,20 +33,37 @@ def outside_baseline(baseline: Snapshot, current: Snapshot) -> list[str]:
 
 def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: dict[str, Connector],
           baselines: dict[str, Snapshot], confirm: Callable[[Step], bool], log: Callable[[dict], None],
-          dry_run: bool = False, now: Callable[[], float] = time.time) -> Outcome:
+          dry_run: bool = False, now: Callable[[], float] = time.time,
+          progress: Callable[[str], None] = lambda s: None,
+          checkpoint: Callable[[Outcome], None] = lambda o: None) -> Outcome:
     started = now()
     provider = {a.id: a.provider for a in accounts}
+    by_id = {a.id: a for a in accounts}
+    # Only accounts with steps are read: a one-user press must not walk the whole tenant.
+    targets = [i for i in dict.fromkeys(s.account for s in plan) if not by_id[i].protected]
     touched: dict[str, list[str]] = {}
-    for a in accounts:
-        if a.protected or a.provider not in connectors:  # break-glass is never touched, reads included
-            continue
-        try:
-            touched[a.id] = outside_baseline(baselines.get(a.id, {}), connectors[a.provider].snapshot(a))
-        except Exception as e:
-            touched[a.id] = [f"unknown: could not read ({e})"]
+    removed: dict[str, list[str]] = {}
+    first: dict[str, Snapshot] = {}
+    extra: list[Result] = []  # failures of the tool's own bookkeeping, listed last
+    log_ok = True
 
     def done(step, status, evidence=None, detail=""):
         return Result(step, status, evidence, detail, now())
+
+    def snap(i: str) -> Snapshot:
+        return connectors[provider[i]].snapshot(by_id[i])
+
+    def record(r: Result) -> None:  # calling thread only: the log writer is not concurrency-safe
+        nonlocal log_ok
+        if not log_ok:
+            return
+        try:
+            log({"account": r.step.account, "action": r.step.action, "phase": r.step.phase, "tier": r.step.tier,
+                 "status": r.status, "evidence": r.evidence, "detail": r.detail})
+        except Exception as e:  # results must survive a broken log
+            log_ok = False
+            extra.append(done(Step("-", "audit_log", Phase.PURGE, Tier.API, "Audit log"), Status.STILL_OPEN,
+                              detail=f"could not write the audit log: {e}"))
 
     def readback(step: Step) -> bool | None:
         ok = connectors[provider[step.account]].check(step, baselines.get(step.account, {}))
@@ -65,71 +82,128 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
         return done(step, Status.LOCKED, Evidence.VERIFIED if ok is True else Evidence.ACCEPTED)
 
     if dry_run:
+        for i in targets:
+            try:
+                touched[i] = outside_baseline(baselines.get(i, {}), snap(i))
+            except Exception as e:
+                touched[i] = [f"unknown: could not read ({e})"]
         results = [done(s, Status.STILL_OPEN, detail="dry run") for s in plan]
-    else:
-        finished: dict[Step, Result] = {}
-        futures: dict[Step, Future] = {}
-        guided = [s for s in plan if s.tier is Tier.GUIDED]
-        # Hand-managed pool: leaving a `with` block would join in-flight provider calls on interrupt.
-        pool = ThreadPoolExecutor(max_workers=16)
-        try:
-            for phase in (Phase.FREEZE, Phase.PURGE):
-                steps = [s for s in plan if s.tier is Tier.API and s.phase == phase]
-                futures.update({s: pool.submit(api, s) for s in steps})
-                for s in steps:
-                    finished[s] = futures[s].result()
-            for step in guided:
-                if not confirm(step):
-                    finished[step] = done(step, Status.NEEDS_YOU)
-                    continue
-                try:
-                    ok = readback(step)
-                except Exception as e:
-                    finished[step] = done(step, Status.STILL_OPEN, detail=str(e))
-                    continue
-                if ok is False:
-                    finished[step] = done(step, Status.NEEDS_YOU, detail="marked done but the read-back still shows it open")
-                else:
-                    finished[step] = done(step, Status.LOCKED, Evidence.VERIFIED if ok is True else Evidence.OWNER_CONFIRMED)
-        except (KeyboardInterrupt, Exception):  # Ctrl-C, EOF or a raising confirm: keep what is gathered
-            pass
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
-        for s in plan:
-            if s in finished:
-                continue
-            f = futures.get(s)
-            if f is not None and f.done() and not f.cancelled() and f.exception() is None:
-                finished[s] = f.result()  # finished while the interrupt was handled
-            elif s.tier is Tier.API:
-                finished[s] = done(s, Status.STILL_OPEN, detail="interrupted")
+        for r in results:
+            record(r)
+        return Outcome(results + extra, touched, started)
+
+    finished: dict[Step, Result] = {}
+    futures: dict[Step, Future] = {}
+    snaps: dict[str, Future] = {}
+    guided = [s for s in plan if s.tier is Tier.GUIDED]
+
+    def decide(step: Step, r: Result) -> None:
+        finished[step] = r
+        record(r)
+
+    def take_first(i: str) -> None:
+        f = snaps.get(i)
+        if f is None or not f.done() or f.cancelled():
+            touched[i] = ["unknown: not read (interrupted)"]
+        elif f.exception() is not None:
+            touched[i] = [f"unknown: could not read ({f.exception()})"]
+        else:
+            first[i] = f.result()
+            touched[i] = outside_baseline(baselines.get(i, {}), first[i])
+
+    # Hand-managed pool: leaving a `with` block would join in-flight provider calls on interrupt.
+    pool = ThreadPoolExecutor(max_workers=16)
+    try:
+        for phase in (Phase.FREEZE, Phase.PURGE):
+            steps = [s for s in plan if s.tier is Tier.API and s.phase == phase]
+            progress(f"{phase.value.title()}: {len(steps)} actions")
+            if phase is Phase.FREEZE:
+                for i in targets:  # each read is queued beside its own freeze, so it never holds up the first lock
+                    snaps[i] = pool.submit(snap, i)
+                    futures.update({s: pool.submit(api, s) for s in steps if s.account == i})
             else:
-                finished[s] = done(s, Status.NEEDS_YOU, detail="not asked")
-        results = [finished[s] for s in plan]
-
-        has_steps = {s.account for s in plan}
-        open_ = {a.id for a in accounts if not a.protected and a.id not in has_steps}
-        open_ |= {r.step.account for r in results if r.step.phase is Phase.FREEZE and r.status is not Status.LOCKED}
-        for a in accounts:
-            bad = sorted(resetters(a.id, edges) & open_)
-            if bad and not a.protected:
-                results.append(done(Step(a.id, "reopenable", Phase.FREEZE, Tier.API, "Re-openable"),
-                                    Status.STILL_OPEN, detail="re-openable from " + ", ".join(bad)))
-
-    for r in results[:]:  # calling thread only: the log writer is not concurrency-safe
+                futures.update({s: pool.submit(api, s) for s in steps})
+            pending = {futures[s]: s for s in steps}
+            for f in as_completed(pending):
+                decide(pending[f], f.result())
+            if phase is Phase.FREEZE:  # purge removes items, so the first read must be in hand before it starts
+                wait(snaps.values())
+                for i in targets:
+                    take_first(i)
+        after = {i: pool.submit(snap, i) for i in first}
+        wait(after.values())
+        for i in targets:
+            f = after.get(i)
+            if f is None:
+                removed[i] = list(touched[i])  # the first read already failed
+            elif f.exception() is not None:
+                removed[i] = [f"unknown: could not read ({f.exception()})"]
+            else:
+                removed[i] = outside_baseline(f.result(), first[i])
         try:
-            log({"account": r.step.account, "action": r.step.action, "phase": r.step.phase, "tier": r.step.tier,
-                 "status": r.status, "evidence": r.evidence, "detail": r.detail})
-        except Exception as e:  # results must survive a broken log
-            results.append(done(Step("-", "audit_log", Phase.PURGE, Tier.API, "Audit log"), Status.STILL_OPEN,
-                                detail=f"could not write the audit log: {e}"))
-            break
-    return Outcome(results, touched, started)
+            checkpoint(Outcome([finished[s] for s in plan if s in finished] + extra, dict(touched), started,
+                               dict(removed)))
+        except Exception as e:  # saving progress must never stop the press
+            extra.append(done(Step("-", "checkpoint", Phase.PURGE, Tier.API, "Save progress"), Status.STILL_OPEN,
+                              detail=f"could not save progress: {e}"))
+        if guided:
+            progress(f"Guided: {len(guided)} steps for you")
+        for step in guided:
+            if not confirm(step):
+                decide(step, done(step, Status.NEEDS_YOU))
+                continue
+            try:
+                ok = readback(step)
+            except Exception as e:
+                decide(step, done(step, Status.STILL_OPEN, detail=str(e)))
+                continue
+            if ok is False:
+                decide(step, done(step, Status.NEEDS_YOU, detail="marked done but the read-back still shows it open"))
+            else:
+                decide(step, done(step, Status.LOCKED, Evidence.VERIFIED if ok is True else Evidence.OWNER_CONFIRMED))
+    except (KeyboardInterrupt, Exception):  # Ctrl-C, EOF or a raising confirm: keep what is gathered
+        pass
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    late: list[Result] = []
+    for s in plan:
+        if s in finished:
+            continue
+        f = futures.get(s)
+        if f is not None and f.done() and not f.cancelled() and f.exception() is None:
+            finished[s] = f.result()  # finished while the interrupt was handled
+        elif s.tier is Tier.API:
+            finished[s] = done(s, Status.STILL_OPEN, detail="interrupted")
+        else:
+            finished[s] = done(s, Status.NEEDS_YOU, detail="not asked")
+        late.append(finished[s])
+    for i in targets:
+        if i not in touched:
+            take_first(i)
+    results = [finished[s] for s in plan]
+
+    # Every account counts as a possible open root, but only targets get a re-openable line.
+    open_ = {a.id for a in accounts if not a.protected and a.id not in targets}
+    open_ |= {r.step.account for r in results if r.step.phase is Phase.FREEZE and r.status is not Status.LOCKED}
+    for i in targets:
+        bad = sorted(resetters(i, edges) & open_)
+        if bad:
+            r = done(Step(i, "reopenable", Phase.FREEZE, Tier.API, "Re-openable"),
+                     Status.STILL_OPEN, detail="re-openable from " + ", ".join(bad))
+            results.append(r)
+            late.append(r)
+    try:
+        for r in late:
+            record(r)
+    except KeyboardInterrupt:  # results are kept; only these log lines are lost
+        pass
+    return Outcome(results + extra, touched, started, removed)
 
 
 def watch_once(results: list[Result], connectors: dict[str, Connector], accounts: list[Account],
                baselines: dict[str, Snapshot], released: set[str], log: Callable[[dict], None]) -> list[str]:
     provider = {a.id: a.provider for a in accounts}
+    by_id = {a.id: a for a in accounts}
     lines: list[str] = []
     log_failed = False
 
@@ -166,15 +240,24 @@ def watch_once(results: list[Result], connectors: dict[str, Connector], accounts
             note("changed", step, "changed since lockdown", f"{name}: changed since lockdown")
             continue
         try:
+            before = conn.snapshot(by_id[step.account])
+        except Exception as e:
+            before, why = None, str(e)
+        try:
             conn.run(step, base)
             fixed = conn.check(step, base) is True
             err = "still open after reapply"
         except Exception as e:
             fixed, err = False, str(e)
+        try:  # itemised so whatever the re-apply deleted can be restored
+            gone = outside_baseline(conn.snapshot(by_id[step.account]), before) if before is not None else None
+        except Exception as e:
+            gone, why = None, str(e)
+        removed = f"removed: {', '.join(gone) or 'nothing'}" if gone is not None else f"removed: unknown (could not read: {why})"
         if fixed:
-            note("reapplied", step, "put back", f"{name}: was changed, put back")
+            note("reapplied", step, f"put back; {removed}", f"{name}: was changed, put back")
         else:
-            note("reapply_failed", step, err, f"{name}: was changed and could not be put back ({err})")
+            note("reapply_failed", step, f"{err}; {removed}", f"{name}: was changed and could not be put back ({err})")
     return lines
 
 

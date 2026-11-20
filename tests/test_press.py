@@ -162,7 +162,7 @@ def test_protected_account_is_not_read_and_not_an_open_resetter():
     c = mk(); reads = []; c.snapshot = lambda a: reads.append(a.id) or {}
     accts = [Account("vault", "fake", protected=True), Account("bank", "fake")]
     out = press(compile_plan(accts, [("vault", "bank")], {"fake": c}), accts, [("vault", "bank")], {"fake": c}, {}, lambda s: True, lambda e: None)
-    assert reads == ["bank"] and set(out.touched) == {"bank"}
+    assert set(reads) == {"bank"} and set(out.touched) == {"bank"}
     assert not [r for r in out.results if r.step.action == "reopenable"]
 
 def test_check_that_raises_is_still_open_with_error_text():
@@ -177,3 +177,86 @@ def test_snapshot_that_raises_is_unknown():
     def bad(a): raise RuntimeError("no read")
     c.snapshot = bad
     assert run(c).touched["mail"] == ["unknown: could not read (no read)"]
+
+
+# -- final-review fixes --------------------------------------------------
+
+def test_one_user_press_reads_only_that_account():
+    c = mk(); reads = []; c.snapshot = lambda a: reads.append(a.id) or {}
+    plan = compile_plan([A[1]], E, {"fake": c})
+    out = press(plan, A, E, {"fake": c}, {}, lambda s: True, lambda e: None)
+    assert set(reads) == {"bank"} and set(out.touched) == {"bank"}
+    assert {r.step.account for r in out.results if r.step.action == "reopenable"} == {"bank"}
+
+
+def test_snapshot_runs_beside_the_freeze_not_before_it():
+    c = mk()
+    def snapshot(a):  # blocks until the freeze has run: deadlocks if read first, one at a time
+        _wait_until(lambda: f"{a.id}/freeze" in c.ran, timeout=2)
+        return {}
+    c.snapshot = snapshot
+    out = run(c)
+    assert out.touched == {"mail": [], "bank": []}
+
+
+def test_progress_is_announced_per_phase_on_the_calling_thread():
+    lines = []
+    run(mk(), progress=lambda s: lines.append((s, threading.current_thread() is threading.main_thread())))
+    assert [s.split(":")[0] for s, _ in lines] == ["Freeze", "Purge", "Guided"] and all(t for _, t in lines)
+
+
+def test_api_results_are_logged_before_the_walkthrough_on_the_calling_thread():
+    seen = []; c = mk()
+    def log(e): seen.append((e["action"], threading.current_thread() is threading.main_thread()))
+    def confirm(s):
+        assert len(seen) >= 6
+        return True
+    press(compile_plan(A, E, {"fake": c}), A, E, {"fake": c}, {}, confirm, log)
+    assert len(seen) == 8 and all(t for _, t in seen)
+
+
+def test_checkpoint_gets_api_results_before_the_first_guided_step():
+    got = []; c = mk()
+    out = run(c, confirm=lambda s: got.append("asked") or True, checkpoint=lambda o: got.append(o))
+    first = got[0]
+    assert got[1:] == ["asked", "asked"] and len(first.results) == 6
+    assert not [r for r in first.results if r.step.tier is Tier.GUIDED] and set(first.touched) == {"mail", "bank"}
+    assert len(out.results) == 8
+
+
+def test_failing_checkpoint_is_reported_and_press_continues():
+    def bad(o): raise OSError("disk full")
+    out = run(mk(), checkpoint=bad)
+    assert by(out, "mail", "guided").status is Status.LOCKED
+    cp = by(out, "-", "checkpoint")
+    assert cp.status is Status.STILL_OPEN and "disk full" in cp.detail
+
+
+def test_ctrl_c_during_a_log_write_does_not_escape():
+    def log(e):
+        if e["action"] == "freeze": raise KeyboardInterrupt
+    c = mk()
+    out = press(compile_plan(A, E, {"fake": c}), A, E, {"fake": c}, {}, lambda s: True, log)
+    assert by(out, "bank", "guided").detail == "not asked"
+
+
+def test_removed_lists_what_the_press_took_away():
+    c = mk()
+    c.snapshot = lambda a: {"filters": ["keep"]} if f"{a.id}/purge" in c.ran else {"filters": ["keep", "evil"], "apps": ["x"]}
+    out = run(c)
+    assert out.removed == {"mail": ["apps: x", "filters: evil"], "bank": ["apps: x", "filters: evil"]}
+
+
+def test_removed_is_unknown_when_the_second_read_fails():
+    c = mk()
+    def snapshot(a):
+        if f"{a.id}/purge" in c.ran: raise RuntimeError("gone")
+        return {}
+    c.snapshot = snapshot
+    assert run(c).removed["mail"] == ["unknown: could not read (gone)"]
+
+
+def test_dry_run_reads_only_targets_and_removes_nothing():
+    c = mk(); reads = []; c.snapshot = lambda a: reads.append(a.id) or {}
+    out = press(compile_plan([A[0]], E, {"fake": c}), A, E, {"fake": c}, {}, lambda s: True, lambda e: None, dry_run=True)
+    assert reads == ["mail"] and out.removed == {}

@@ -52,7 +52,7 @@ def cmd_map(a) -> int:
 # -- press / watch / report ---------------------------------------------
 
 def _publish_report(s: Session, outcome: Outcome) -> None:
-    shown = replace(outcome, touched=_redact(outcome.touched, s.accounts))
+    shown = replace(outcome, touched=_redact(outcome.touched, s.accounts), removed=_redact(outcome.removed, s.accounts))
     md, data = report.render(shown, time.time())
 
     def write():
@@ -124,7 +124,7 @@ def cmd_press(a) -> int:
                 print("\n".join(f"  - {i}" for i in items))
         return 0
     # press absorbs Ctrl-C and EOF, so everything below still runs after an interrupt.
-    out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, s.log)
+    out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, s.log, progress=_warn)
     def save():
         s.data["last_outcome"] = outcome_to_json(out)
         s.data["log_head"] = log.head(s.log_path)

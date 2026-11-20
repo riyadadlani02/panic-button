@@ -114,3 +114,17 @@ def test_baseline_is_passed_to_check_and_run(c):
     c.check = lambda step, baseline: got.append(baseline) or orig(step, baseline)
     watch_once([locked("fwd", WatchPolicy.REAPPLY)], {"fake": c}, A, {"mail": {"k": ["v"]}}, set(), lambda e: None)
     assert got[0] == {"k": ["v"]}
+
+
+def test_reapply_logs_what_it_removed(c, seen):
+    c.state["mail/fwd"] = False
+    c.snapshot = lambda a: {"filters": ["keep"]} if c.ran else {"filters": ["keep", "evil"]}
+    watch_once([locked("fwd", WatchPolicy.REAPPLY)], {"fake": c}, A, {}, set(), seen.append)
+    assert seen[0]["event"] == "reapplied" and "filters: evil" in seen[0]["detail"] and "keep" not in seen[0]["detail"]
+
+
+def test_reapply_with_unreadable_snapshot_says_unknown(c, seen):
+    c.state["mail/fwd"] = False
+    c.snapshot = lambda a: (_ for _ in ()).throw(RuntimeError("no read"))
+    watch_once([locked("fwd", WatchPolicy.REAPPLY)], {"fake": c}, A, {}, set(), seen.append)
+    assert seen[0]["event"] == "reapplied" and "unknown" in seen[0]["detail"] and "no read" in seen[0]["detail"]

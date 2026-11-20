@@ -490,3 +490,20 @@ def test_workspace_filter_contents_are_withheld_in_dry_run_and_report(armed, pat
 def test_rehearse_without_approved_change_does_not_resave_vault(armed):
     before = vpath.read_bytes()
     assert cli("rehearse") == 0 and vpath.read_bytes() == before
+
+
+# -- final-review fixes --------------------------------------------------
+
+def test_workspace_removed_filters_are_withheld_in_the_report(armed, patch_watch, capsys):
+    ws = _ws_armed(armed)
+    ws.snapshot = lambda a: {"filters": []} if "w@d.com/purge" in ws.ran else {"filters": ["from:x subject:secret"]}
+    cli("press", "--user", "w@d.com", connectors={"fake": fake, "google_workspace": ws})
+    out = capsys.readouterr().out
+    removed = out.split("## Removed by this press")[1]
+    assert "filters: 1 not in baseline (contents withheld)" in removed and "secret" not in out
+
+
+def test_press_prints_phase_progress_to_stderr(armed, patch_watch, capsys):
+    cli("press", "--all")
+    err = capsys.readouterr().err
+    assert "Freeze:" in err and "Purge:" in err

@@ -1,5 +1,5 @@
 """Shared types; every later module imports these."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 
@@ -64,6 +64,7 @@ class Outcome:
     results: list[Result]
     touched: dict[str, list[str]]
     started_at: float
+    removed: dict[str, list[str]] = field(default_factory=dict)  # per account: "category: item" the press took away
 
 
 Edges = list[tuple[str, str]]  # (a, b): control of a can reset b

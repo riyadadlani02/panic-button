@@ -68,6 +68,7 @@ def render(outcome: Outcome, now: float) -> tuple[str, dict]:
         "needs_you": needs,
         "still_open": still,
         "touched": outcome.touched,
+        "removed": outcome.removed,
         "freeze_seconds": freeze,
     }
 
@@ -84,10 +85,16 @@ def render(outcome: Outcome, now: float) -> tuple[str, dict]:
         if items:
             md += [f"### {label}", "", *_lines(items), ""]
     md += ["## Needs you", "", *_lines(needs, link=True), "", "## Still open", "", *_lines(still), ""]
-    md += ["## Attacker may have touched", ""]
-    if not any(outcome.touched.values()):
-        md += ["Nothing."]
-    for acct, ts in outcome.touched.items():
+    md += _per_account("Attacker may have touched", outcome.touched)
+    md += _per_account("Removed by this press", outcome.removed)
+    return "\n".join(md).rstrip("\n") + "\n", data
+
+
+def _per_account(heading: str, items: dict[str, list[str]]) -> list[str]:
+    md = [f"## {heading}", ""]
+    if not any(items.values()):
+        md += ["Nothing.", ""]
+    for acct, ts in items.items():
         if ts:
             md += [f"### {_clean(acct)}", "", *(f"- {_clean(t)}" for t in ts), ""]
-    return "\n".join(md).rstrip("\n") + "\n", data
+    return md
