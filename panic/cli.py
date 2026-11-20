@@ -227,10 +227,11 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None, connectors: dict | None = None, authorize=None) -> int:
+def main(argv: list[str] | None = None, connectors: dict | None = None, authorize=None, whoami=None) -> int:
     try:
         a = _parser().parse_args(argv)
         a.connectors, a.authorize = connectors, authorize or google_personal.authorize
+        a.whoami = whoami or google_personal.signed_in_address
         return a.fn(a)
     except SystemExit as e:  # --help, or a usage error already printed
         return int(e.code or 0)

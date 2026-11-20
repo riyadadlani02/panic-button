@@ -16,11 +16,22 @@ def _plan_lines(plan: list[Step]) -> list[str]:
 
 # -- arm ----------------------------------------------------------------
 
-def _authorize(a) -> dict:
+def _client_config(a) -> dict:
     try:
-        return a.authorize(Path(a.client_secrets))
+        return json.loads(Path(a.client_secrets).expanduser().read_text())
+    except (OSError, ValueError) as e:
+        raise CliError(f"could not read the OAuth client file {a.client_secrets}: {e}")
+
+
+def _sign_in(a, config: dict, email: str) -> dict:
+    try:
+        token = a.authorize(config, login_hint=email)
+        who = a.whoami(token)
     except Exception as e:
         raise CliError(f"sign-in failed: {e}")
+    if who.casefold() != email.casefold():  # the chooser lets the owner pick any account
+        raise CliError(f"signed in as {who}, not {email}; nothing was stored.")
+    return token
 
 
 def _print_snapshot(snap: dict) -> None:
@@ -34,11 +45,12 @@ def _arm_personal(a) -> int:
     if not a.client_secrets:
         raise CliError("--client-secrets FILE is required to sign in.")
     email = a.personal.lower()
+    config = _client_config(a)
     if a.reconnect:
         s = Session(a)
         if not any(x.id == email and x.provider == "google_personal" for x in s.accounts):
             raise CliError(f"{email} is not armed. Arm it first, without --reconnect.")
-        s.data["credentials"].setdefault("google_personal", {})[email] = _authorize(a)
+        s.data["credentials"].setdefault("google_personal", {})[email] = _sign_in(a, config, email)
         s.save()
         print(f"Reconnected {email}.")
         return 0
@@ -50,7 +62,7 @@ def _arm_personal(a) -> int:
     existing = next((x for x in s.accounts if x.id == email), None)
     if existing and (existing.protected or existing.provider != "google_personal"):
         raise CliError(f"{email} is already armed ({"protected, " if existing.protected else ""}{existing.provider}); refusing to replace it.")
-    token = _authorize(a)
+    token = _sign_in(a, config, email)
     account = Account(email, "google_personal")
     try:
         conn = (a.connectors or {}).get("google_personal") or google_personal.Personal({email: token})

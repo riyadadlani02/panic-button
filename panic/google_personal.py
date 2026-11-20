@@ -1,6 +1,5 @@
 """Connector for an individual's own Gmail account."""
 import threading
-from pathlib import Path
 
 import googleapiclient.discovery
 from google.oauth2.credentials import Credentials
@@ -38,9 +37,20 @@ _CATALOG = [
 _TIER = {c[0]: c[2] for c in _CATALOG}
 
 
-def authorize(client_secrets: Path) -> dict:
-    creds = InstalledAppFlow.from_client_secrets_file(str(client_secrets), SCOPES).run_local_server(port=0)
+def authorize(client_config: dict, login_hint: str | None = None) -> dict:
+    hint = {"login_hint": login_hint} if login_hint else {}
+    creds = InstalledAppFlow.from_client_config(client_config, SCOPES).run_local_server(port=0, **hint)
     return json.loads(creds.to_json())
+
+
+def signed_in_address(token_info: dict, build=googleapiclient.discovery.build) -> str:
+    # The chooser lets the owner pick any account; the primary send-as address says which one it was.
+    creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+    svc = build("gmail", "v1", credentials=creds, cache_discovery=False)
+    for s in svc.users().settings().sendAs().list(userId="me").execute().get("sendAs", []):
+        if s.get("isPrimary"):
+            return s["sendAsEmail"]
+    raise ValueError("the signed-in account has no primary address")
 
 
 class Personal:
@@ -64,14 +74,15 @@ class Personal:
 
     def snapshot(self, account: Account) -> Snapshot:
         svc = self._svc(account.id)
-        return {"filters": gs.filters(svc), "forwarding": gs.forwarding(svc), "imap_pop": gs.imap_pop(svc)}
+        return {"filters": gs.filters(svc), "forwarding": gs.forwarding(svc),
+                "forwarding_addresses": gs.forwarding_addresses(svc), "imap_pop": gs.imap_pop(svc)}
 
     @staticmethod
-    def _known_filters(step: Step, baseline: Snapshot) -> list[str]:
+    def _known(step: Step, baseline: Snapshot, category: str) -> list[str]:
         # A missing key must never mean "keep nothing": that would delete every filter.
-        if "filters" not in baseline:
-            raise KeyError(f"no baseline recorded for filters on {step.account}")
-        return baseline["filters"]
+        if category not in baseline:
+            raise KeyError(f"no baseline recorded for {category} on {step.account}")
+        return baseline[category]
 
     def run(self, step: Step, baseline: Snapshot) -> None:
         if _TIER[step.action] is Tier.GUIDED:
@@ -80,14 +91,16 @@ class Personal:
         if step.action == "imap_pop":
             gs.disable_imap_pop(svc)
         else:
-            gs.delete_filters_outside(svc, self._known_filters(step, baseline))
+            gs.delete_filters_outside(svc, self._known(step, baseline, "filters"))
 
     def check(self, step: Step, baseline: Snapshot) -> bool | None:
         if step.action == "imap_pop":
             return gs.imap_pop(self._svc(step.account)) == []
-        if step.action == "forwarding_off":
-            return gs.forwarding(self._svc(step.account)) == []
+        if step.action == "forwarding_off":  # the title promises every address is gone, so both are read
+            keep = self._known(step, baseline, "forwarding_addresses")
+            svc = self._svc(step.account)
+            return gs.forwarding(svc) == [] and all(a in keep for a in gs.forwarding_addresses(svc))
         if step.action == "filters":
-            keep = self._known_filters(step, baseline)
+            keep = self._known(step, baseline, "filters")
             return all(f in keep for f in gs.filters(self._svc(step.account)))
         return None

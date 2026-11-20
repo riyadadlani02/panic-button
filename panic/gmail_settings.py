@@ -43,6 +43,11 @@ def forwarding(svc) -> list[str]:
     return [f"on -> {r.get('emailAddress', '')}"] if r.get("enabled") else []
 
 
+def forwarding_addresses(svc) -> list[str]:
+    r = _exec(_s(svc).forwardingAddresses().list(userId="me")) or {}
+    return [a["forwardingEmail"] for a in r.get("forwardingAddresses", [])]
+
+
 def imap_pop(svc) -> list[str]:
     on = []
     # Fail closed: a missing field must not read as "off".

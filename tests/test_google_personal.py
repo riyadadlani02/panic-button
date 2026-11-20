@@ -13,10 +13,11 @@ F1 = {"criteria": {"from": "a@x"}, "action": {"addLabelIds": ["L"]}}
 CANON_F1 = json.dumps(F1, sort_keys=True)
 
 
-def make(filters=(), fwd=None, imap=False, pop="disabled"):
+def make(filters=(), fwd=None, imap=False, pop="disabled", addrs=()):
     svc = MagicMock()
     st = svc.users().settings()
     st.filters().list().execute.return_value = {"filter": list(filters)}
+    st.forwardingAddresses().list().execute.return_value = {"forwardingAddresses": [{"forwardingEmail": a} for a in addrs]}
     st.getAutoForwarding().execute.return_value = fwd or {"enabled": False}
     st.getImap().execute.return_value = {"enabled": imap}
     st.getPop().execute.return_value = {"accessWindow": pop}
@@ -29,7 +30,7 @@ def step(conn, action):
 
 def test_snapshot_shape():
     conn, _ = make()
-    assert set(conn.snapshot(ACCT)) == {"filters", "forwarding", "imap_pop"}
+    assert set(conn.snapshot(ACCT)) == {"filters", "forwarding", "forwarding_addresses", "imap_pop"}
 
 
 def test_filters_deletes_only_what_is_outside_baseline():
@@ -54,7 +55,7 @@ def test_guided_steps_never_call_the_api():
 
 def test_readbacks():
     conn, _ = make(fwd={"enabled": True, "emailAddress": "x@y"}, imap=True)
-    assert conn.check(step(conn, "forwarding_off"), {}) is False
+    assert conn.check(step(conn, "forwarding_off"), {"forwarding_addresses": []}) is False
     assert conn.check(step(conn, "imap_pop"), {}) is False
     assert conn.check(step(conn, "sign_out"), {}) is None
 
@@ -125,3 +126,33 @@ def test_filter_delete_404_is_not_an_error():
     conn, svc = make([{"id": "f1", **F1}])
     svc.users().settings().filters().delete().execute.side_effect = HttpError(MagicMock(status=404, reason="x"), b"{}")
     conn.run(step(conn, "filters"), {"filters": []})
+
+
+def test_forwarding_off_needs_switch_off_and_no_new_address():
+    conn, _ = make(addrs=["old@x.test", "evil@x.test"])
+    s = step(conn, "forwarding_off")
+    assert conn.check(s, {"forwarding_addresses": ["old@x.test"]}) is False
+    assert conn.check(s, {"forwarding_addresses": ["old@x.test", "evil@x.test"]}) is True
+    assert conn.snapshot(ACCT)["forwarding_addresses"] == ["old@x.test", "evil@x.test"]
+    with pytest.raises(KeyError, match="no baseline recorded for forwarding_addresses"):
+        conn.check(s, {})
+
+
+def test_signed_in_address_is_the_primary_send_as():
+    svc = MagicMock()
+    svc.users().settings().sendAs().list().execute.return_value = {"sendAs": [
+        {"sendAsEmail": "alias@x.test"}, {"sendAsEmail": "Real@x.test", "isPrimary": True}]}
+    assert google_personal.signed_in_address(TOKEN, build=lambda *a, **k: svc) == "Real@x.test"
+    svc.users().settings().sendAs().list.assert_called_with(userId="me")
+    svc.users().settings().sendAs().list().execute.return_value = {"sendAs": [{"sendAsEmail": "a@x.test"}]}
+    with pytest.raises(ValueError):
+        google_personal.signed_in_address(TOKEN, build=lambda *a, **k: svc)
+
+
+def test_authorize_uses_the_client_config_and_login_hint(monkeypatch):
+    flow = MagicMock()
+    flow.from_client_config.return_value.run_local_server.return_value.to_json.return_value = '{"refresh_token": "r"}'
+    monkeypatch.setattr(google_personal, "InstalledAppFlow", flow)
+    assert google_personal.authorize({"installed": {}}, login_hint="me@x.test") == {"refresh_token": "r"}
+    flow.from_client_config.assert_called_with({"installed": {}}, google_personal.SCOPES)
+    flow.from_client_config.return_value.run_local_server.assert_called_with(port=0, login_hint="me@x.test")

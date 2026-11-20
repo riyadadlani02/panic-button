@@ -14,7 +14,8 @@ from panic.cli import main, outcome_from_json, outcome_to_json
 from panic.model import Evidence, Outcome, Phase, Result, Status, Step, Tier, WatchPolicy
 
 PW = "pw"
-fake = vpath = kpath = report_path = log_path = None
+CLIENT = {"installed": {"client_id": "i"}}
+fake = vpath = kpath = report_path = log_path = cs = None
 
 
 def _steps():
@@ -24,8 +25,10 @@ def _steps():
 @pytest.fixture
 def bare(tmp_path):
     """Paths set, no vault yet."""
-    global fake, vpath, kpath, report_path, log_path
+    global fake, vpath, kpath, report_path, log_path, cs
     fake = FakeConnector(steps=_steps())
+    cs = tmp_path / "cs.json"
+    cs.write_text(json.dumps(CLIENT))
     vpath, kpath = tmp_path / "vault" / "panic.vault", tmp_path / "key"
     report_path, log_path = Path(f"{vpath}.report.md"), Path(f"{vpath}.log.jsonl")
     return tmp_path
@@ -55,8 +58,11 @@ def open_vault():
     return vault.load(vpath, PW, kpath.read_bytes())
 
 
-def cli(*args, passphrase=PW, answers=(), connectors=None, authorize=None):
+def cli(*args, passphrase=PW, answers=(), connectors=None, authorize=None, whoami=None):
     it = iter(answers)
+    if whoami is None:  # by default the owner signs in as the account being armed
+        who = args[args.index("--personal") + 1] if "--personal" in args else ""
+        whoami = lambda token: who
 
     def fake_input(prompt=""):
         try:
@@ -66,7 +72,8 @@ def cli(*args, passphrase=PW, answers=(), connectors=None, authorize=None):
 
     with patch("getpass.getpass", return_value=passphrase), patch("builtins.input", fake_input):
         return main(["--vault", str(vpath), "--keyfile", str(kpath), *args],
-                    connectors={"fake": fake} if connectors is None else connectors, authorize=authorize)
+                    connectors={"fake": fake} if connectors is None else connectors, authorize=authorize,
+                    whoami=whoami)
 
 
 # -- the brief's tests ---------------------------------------------------
@@ -261,11 +268,11 @@ def arm_personal(*extra, answers, token=None, **kw):
     f.snap = {"filters": ["f1"]}
     calls = []
 
-    def authorize(p):
-        calls.append(p)
+    def authorize(cfg, login_hint=None):
+        calls.append((cfg, login_hint))
         return token or {"refresh_token": "r"}
 
-    rc = cli("arm", "--personal", "Me@Example.com", "--client-secrets", "cs.json", *extra, answers=answers,
+    rc = cli("arm", "--personal", "Me@Example.com", "--client-secrets", str(cs), *extra, answers=answers,
              connectors={"google_personal": f}, authorize=authorize, **kw)
     return rc, calls
 
@@ -277,7 +284,7 @@ def test_arm_refusal_writes_nothing_and_starts_no_sign_in(bare):
 
 def test_arm_creates_vault_and_keyfile_and_records_baseline(bare, capsys):
     rc, calls = arm_personal(answers=["y", "y"])
-    assert rc == 0 and calls == [Path("cs.json")]
+    assert rc == 0 and calls == [(CLIENT, "me@example.com")]
     d = open_vault()
     assert d["accounts"] == [{"id": "me@example.com", "provider": "google_personal", "protected": False}]
     assert d["baselines"]["me@example.com"] == {"filters": ["f1"]}
@@ -294,32 +301,32 @@ def test_arm_declined_baseline_saves_nothing(bare):
 def test_arm_rejects_mismatched_or_empty_passphrase(bare):
     with patch("getpass.getpass", side_effect=["a", "b"]), patch("builtins.input", return_value="y"):
         assert main(["--vault", str(vpath), "--keyfile", str(kpath), "arm", "--personal", "x@y.z",
-                     "--client-secrets", "c"], connectors={}, authorize=lambda p: {}) == 1
+                     "--client-secrets", str(cs)], connectors={}, authorize=lambda cfg, login_hint=None: {}) == 1
     assert not vpath.exists()
-    assert cli("arm", "--personal", "x@y.z", "--client-secrets", "c", passphrase="", answers=["y"]) == 1
+    assert cli("arm", "--personal", "x@y.z", "--client-secrets", str(cs), passphrase="", answers=["y"]) == 1
 
 
 def test_arm_second_account_asks_who_can_reset_it_and_rejects_unknown(armed):
     f = FakeConnector(provider="google_personal")
-    rc = cli("arm", "--personal", "new@x.com", "--client-secrets", "c", connectors={"google_personal": f},
-             authorize=lambda p: {"t": 1}, answers=["y", "y", "ghost", "MAIL"])
+    rc = cli("arm", "--personal", "new@x.com", "--client-secrets", str(cs), connectors={"google_personal": f},
+             authorize=lambda cfg, login_hint=None: {"t": 1}, answers=["y", "y", "ghost", "MAIL"])
     assert rc == 0 and ["mail", "new@x.com"] in open_vault()["edges"]
 
 
 def test_reconnect_fails_for_unarmed_account(armed):
     calls = []
-    rc = cli("arm", "--personal", "ghost@x.com", "--reconnect", "--client-secrets", "c",
-             authorize=lambda p: calls.append(p), answers=[])
+    rc = cli("arm", "--personal", "ghost@x.com", "--reconnect", "--client-secrets", str(cs),
+             authorize=lambda cfg, login_hint=None: calls.append(p), answers=[])
     assert rc == 1 and calls == []
 
 
 def test_reconnect_replaces_only_the_token(armed):
-    cli("arm", "--personal", "new@x.com", "--client-secrets", "c",
+    cli("arm", "--personal", "new@x.com", "--client-secrets", str(cs),
         connectors={"google_personal": FakeConnector(provider="google_personal")},
-        authorize=lambda p: {"t": 1}, answers=["y", "y", ""])
+        authorize=lambda cfg, login_hint=None: {"t": 1}, answers=["y", "y", ""])
     before = open_vault()
-    assert cli("arm", "--personal", "NEW@x.com", "--reconnect", "--client-secrets", "c",
-               authorize=lambda p: {"t": 2}, answers=[]) == 0
+    assert cli("arm", "--personal", "NEW@x.com", "--reconnect", "--client-secrets", str(cs),
+               authorize=lambda cfg, login_hint=None: {"t": 2}, answers=[]) == 0
     after = open_vault()
     assert after["credentials"]["google_personal"]["new@x.com"] == {"t": 2}
     assert after["accounts"] == before["accounts"] and after["baselines"] == before["baselines"]
@@ -403,17 +410,17 @@ def test_report_still_printed_when_report_write_fails(armed, patch_watch, monkey
 def test_personal_arm_cannot_replace_protected_account(armed, capsys):
     before = vpath.read_bytes()
     calls = []
-    rc = cli("arm", "--personal", "boss", "--client-secrets", "c", answers=["y"],
+    rc = cli("arm", "--personal", "boss", "--client-secrets", str(cs), answers=["y"],
              connectors={"google_personal": FakeConnector(provider="google_personal")},
-             authorize=lambda p: calls.append(p))
+             authorize=lambda cfg, login_hint=None: calls.append(p))
     assert rc == 1 and calls == [] and vpath.read_bytes() == before
     assert sum(l.startswith("error:") for l in capsys.readouterr().err.splitlines()) == 1
 
 
 def test_personal_arm_cannot_change_a_provider(armed):
     before = vpath.read_bytes()
-    assert cli("arm", "--personal", "mail", "--client-secrets", "c", answers=["y"],
-               authorize=lambda p: {}) == 1 and vpath.read_bytes() == before
+    assert cli("arm", "--personal", "mail", "--client-secrets", str(cs), answers=["y"],
+               authorize=lambda cfg, login_hint=None: {}) == 1 and vpath.read_bytes() == before
 
 
 def test_workspace_arm_refuses_admin_armed_as_other_provider(armed):
@@ -452,16 +459,16 @@ def test_failing_workspace_listing_is_one_line(bare, capsys):
 
 
 def test_failing_sign_in_is_one_line(bare, capsys):
-    def authorize(p):
+    def authorize(cfg, login_hint=None):
         raise RuntimeError("consent denied")
-    rc = cli("arm", "--personal", "x@y.z", "--client-secrets", "c", answers=["y"], authorize=authorize)
+    rc = cli("arm", "--personal", "x@y.z", "--client-secrets", str(cs), answers=["y"], authorize=authorize)
     err = capsys.readouterr().err.strip().splitlines()
     assert rc == 1 and len(err) == 1 and "consent denied" in err[0] and not vpath.exists()
 
 
 def test_wrong_length_existing_keyfile_is_one_line(bare, capsys):
     kpath.write_bytes(b"short")
-    assert cli("arm", "--personal", "x@y.z", "--client-secrets", "c", answers=["y"], authorize=lambda p: {}) == 1
+    assert cli("arm", "--personal", "x@y.z", "--client-secrets", str(cs), answers=["y"], authorize=lambda cfg, login_hint=None: {}) == 1
     assert "key file" in capsys.readouterr().err and not vpath.exists()
 
 
@@ -507,3 +514,25 @@ def test_press_prints_phase_progress_to_stderr(armed, patch_watch, capsys):
     cli("press", "--all")
     err = capsys.readouterr().err
     assert "Freeze:" in err and "Purge:" in err
+
+
+def test_arm_refuses_a_different_signed_in_account(bare, capsys):
+    rc, _ = arm_personal(answers=["y", "y"], whoami=lambda token: "Other@Example.com")
+    err = capsys.readouterr().err.strip().splitlines()
+    assert rc == 1 and len(err) == 1 and "other@example.com" in err[0].lower() and "me@example.com" in err[0]
+    assert not vpath.exists()
+
+
+def test_arm_accepts_the_same_account_in_another_case(bare):
+    rc, _ = arm_personal(answers=["y", "y"], whoami=lambda token: "ME@example.COM")
+    assert rc == 0
+
+
+def test_reconnect_refuses_a_different_signed_in_account(armed):
+    cli("arm", "--personal", "new@x.com", "--client-secrets", str(cs),
+        connectors={"google_personal": FakeConnector(provider="google_personal")},
+        authorize=lambda cfg, login_hint=None: {"t": 1}, answers=["y", "y", ""])
+    before = open_vault()["credentials"]
+    assert cli("arm", "--personal", "new@x.com", "--reconnect", "--client-secrets", str(cs),
+               authorize=lambda cfg, login_hint=None: {"t": 2}, whoami=lambda t: "mallory@x.com") == 1
+    assert open_vault()["credentials"] == before
