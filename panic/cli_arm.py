@@ -30,7 +30,9 @@ def _sign_in(a, config: dict, email: str) -> dict:
     except Exception as e:
         raise CliError(f"sign-in failed: {e}")
     if who.casefold() != email.casefold():  # the chooser lets the owner pick any account
-        raise CliError(f"signed in as {who}, not {email}; nothing was stored.")
+        raise CliError(f"signed in as {who}, not {email}; nothing was stored. Gmail treats dotted and "
+                       "googlemail.com variants as the same mailbox, but they must be typed here exactly as "
+                       "Google shows the primary address.")
     return token
 
 

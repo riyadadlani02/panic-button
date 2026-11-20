@@ -869,3 +869,11 @@ def test_first_creation_refuses_when_a_vault_appeared_meanwhile(bare, capsys):
         return "me@example.com"
     rc, _ = arm_personal(answers=["y", "y"], whoami=whoami)
     assert rc == 1 and vpath.read_bytes() == b"other" and "appeared" in capsys.readouterr().err
+
+
+def test_signed_in_mismatch_names_both_addresses_and_the_gmail_variant_rule(bare, capsys):
+    rc, _ = arm_personal(answers=["y", "y"], whoami=lambda token: "m.e@googlemail.com")
+    err = capsys.readouterr().err
+    assert rc == 1 and "m.e@googlemail.com" in err and "me@example.com" in err
+    assert ("Gmail treats dotted and googlemail.com variants as the same mailbox, but they must be typed here "
+            "exactly as Google shows the primary address.") in err
