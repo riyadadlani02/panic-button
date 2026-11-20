@@ -27,8 +27,30 @@ Decisions the build made on the owner's behalf, in order, each with its reason a
 - **R23.** R19 kept (filter contents withheld from the admin-facing report) with a new `panic removed --user` command that prints a user's full removed items — answers the reviewer's objection that withheld items were unrecoverable.
 - **R24.** cli.py split into session.py and cli_arm.py (reverses R16) — the fix wave would push it past 700 lines.
 
-## Open after the final re-check
+- **R25.** Steps that delete evidence wait for the account's first read, using a per-step `after_read` flag (Workspace `forwarding_off`, personal `imap_pop`), rather than delaying every first-phase step — keeps suspend and sign-out immediate — evidence removed by a step that is not flagged could still be missed.
 
-- Final fix wave re-review (opus): F1-F17 all ADDRESSED. New: N1 Important (interrupted press leaves `removed` empty, report says "Nothing."), N2 Important (`panic removed` picks the latest outcome even when its list is empty, hiding an earlier press's removals), N3-N6 minor. No second fix wave per process; N1, N2 and the limits below surfaced to the user for a decision.
-- Residual, before a real organisation: first read races freeze steps (attacker forwarding can be missing from evidence); watch log lists Workspace filter contents unredacted; report omits the watch's successful put-backs (demo finding).
-- Parked minor: N3 no inter-process lock on Session.update; N4 report re-render replaces the latest press's own file; N5 later non-LOCKED result displaces an earlier LOCKED one in the watch; N6 arm refuses Gmail dot/googlemail variants without a hint; log.append unlocked (two watchers break the chain).
+## State after the last re-check
+
+Two fix passes followed the whole-project review (17 items, then 9). Both were independently re-checked: every item addressed, no critical or important finding open. 211 tests pass.
+
+## Known minor items, not fixed
+
+- A step waiting for its account's read can still call the provider after a Ctrl-C has made `press` return; it is reported "interrupted" although it then runs (`executor.py`, `api_after`).
+- A read that never returns holds back the `after_read` step for that account; there are no HTTP timeouts anywhere in `panic/`.
+- Waiting `after_read` steps each hold a pool worker, which can slow the first phase when many accounts are pressed at once.
+- Two commands creating the log file at the same moment, the first time ever, can truncate each other's first line (`session.py`, `Session.log`).
+- The report says "Put back during the watch: Nothing." when the log is unreadable or a log write failed during the watch; the warning goes to stderr only.
+- If storing watch removals in the vault fails, `panic removed` shows none for the watch; only the redacted log line records it.
+- `panic report` covers the latest press only; put-backs during an earlier press's watch appear in no report (`panic removed` still lists the items).
+- File locks need a filesystem that supports `flock`; on one that does not, vault saves and log appends fail.
+- `panic report` re-renders the latest press into that press's own report file, replacing the copy written at press time.
+- Report file names are precise to the second.
+- The watch does not retry steps that were Still open at press time (R21).
+
+## Not verified against real Google accounts
+
+- Both Google connectors have run against mocked responses only.
+- Whether Gmail settings can be read or changed for a suspended Workspace user (R22). If not, four clean-up steps fail on every Workspace press until the order is changed.
+- The nine guided links for personal accounts.
+- `updatePop(accessWindow="disabled")` and the real shape of `filters.list`.
+- That the tool catches a sign-in as a different account than the one being armed, against Google's real response.
