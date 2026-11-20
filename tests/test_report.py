@@ -49,3 +49,31 @@ def test_freeze_time_is_measured():
 def test_freeze_is_none_when_a_freeze_step_is_not_locked(outcome):
     assert report.render(outcome, now=1.0)[1]["freeze_seconds"] is None
     assert "not complete" in report.render(outcome, now=1.0)[0]
+
+
+def test_untrusted_text_cannot_forge_a_heading():
+    r = Result(Step("mail", "x", Phase.FREEZE, Tier.API, "T"), Status.STILL_OPEN, detail="bad\n## Locked")
+    md, data = report.render(Outcome([r], {"mail": ["f\n## Locked"]}, 0.0), now=1.0)
+    assert sum(line.startswith("## Locked") for line in md.splitlines()) == 1
+    assert data["still_open"][0]["detail"] == "bad\n## Locked" and data["touched"]["mail"] == ["f\n## Locked"]
+
+
+def test_locked_without_evidence_is_rendered():
+    r = Result(Step("mail", "x", Phase.FREEZE, Tier.API, "Odd step"), Status.LOCKED, None)
+    md, _ = report.render(Outcome([r], {}, 0.0), now=1.0)
+    assert "### Evidence not recorded" in md and "Odd step" in md
+
+
+def test_rendered_details(outcome):
+    md, _ = report.render(outcome, now=1.0)
+    assert "- mail: E" in md
+    only_verified = Outcome([outcome.results[0]], {"mail": ["a"], "bank": []}, 0.0)
+    md, _ = report.render(only_verified, now=1.0)
+    assert "### Verified" in md and "### Accepted by provider" not in md and "### Owner confirmed" not in md
+    assert "### mail" in md and "- a" in md and "### bank" not in md
+
+
+def test_lingering_line_carries_utc_time():
+    r = Result(Step("mail", "s", Phase.FREEZE, Tier.API, "Sign out", lingers_s=3600), Status.LOCKED, Evidence.ACCEPTED, at=0.0)
+    md, _ = report.render(Outcome([r], {}, 0.0), now=10.0)
+    assert "may keep working until 1970-01-01T01:00Z" in md

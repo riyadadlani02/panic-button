@@ -15,6 +15,11 @@ def _utc(ts: float) -> str:
     return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%MZ")
 
 
+def _clean(text: str) -> str:
+    # Untrusted text must not be able to start a Markdown line of its own.
+    return " ".join(str(text).split())
+
+
 def _item(r: Result, detail: str | None = None) -> dict:
     return {
         "account": r.step.account,
@@ -38,11 +43,11 @@ def _lines(items: list[dict], link: bool = False) -> list[str]:
         return ["Nothing."]
     out = []
     for i in items:
-        line = f"- {i['account']}: {i['title']}"
+        line = f"- {_clean(i['account'])}: {_clean(i['title'])}"
         if i["detail"]:
-            line += f" ({i['detail']})"
+            line += f" ({_clean(i['detail'])})"
         if link and i["link"]:
-            line += f" {i['link']}"
+            line += f" {_clean(i['link'])}"
         out.append(line)
     return out
 
@@ -73,13 +78,16 @@ def render(outcome: Outcome, now: float) -> tuple[str, dict]:
     )
     md = ["# Lockdown report", "", head, "", "## Locked", ""]
     if not locked:
-        md.append("Nothing.")
-    for ev, label in _EVIDENCE:
-        items = [i for i in locked if i["evidence"] == ev.value]
+        md += ["Nothing.", ""]
+    for ev, label in [*_EVIDENCE, (None, "Evidence not recorded")]:
+        items = [i for i in locked if i["evidence"] == (ev.value if ev else None)]
         if items:
             md += [f"### {label}", "", *_lines(items), ""]
-    md += ["", "## Needs you", "", *_lines(needs, link=True), "", "## Still open", "", *_lines(still), ""]
+    md += ["## Needs you", "", *_lines(needs, link=True), "", "## Still open", "", *_lines(still), ""]
     md += ["## Attacker may have touched", ""]
-    touched = [f"- {acct}: {t}" for acct, ts in outcome.touched.items() for t in ts]
-    md += touched or ["Nothing."]
-    return "\n".join(md).replace("\n\n\n", "\n\n") + "\n", data
+    if not any(outcome.touched.values()):
+        md += ["Nothing."]
+    for acct, ts in outcome.touched.items():
+        if ts:
+            md += [f"### {_clean(acct)}", "", *(f"- {_clean(t)}" for t in ts), ""]
+    return "\n".join(md).rstrip("\n") + "\n", data
