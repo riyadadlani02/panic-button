@@ -1,0 +1,154 @@
+"""Shared command-line plumbing: the open vault, private files, redaction and outcome (de)serialisation."""
+import getpass
+import json
+import os
+import sys
+from dataclasses import asdict
+from pathlib import Path
+
+from panic import google_personal, log, vault
+from panic.model import Account, Evidence, Outcome, Phase, Result, Status, Step, Tier, WatchPolicy
+
+YES = ("y", "yes")
+
+
+class CliError(Exception):
+    pass
+
+
+def _warn(msg: str) -> None:
+    print(msg, file=sys.stderr)
+
+
+def _yes(prompt: str) -> bool:
+    return input(prompt + " [y/n] ").strip().lower() in YES
+
+
+def _private_write(path: Path, data: bytes, exclusive: bool = False) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
+    fd = os.open(path, flags, 0o600)
+    os.fchmod(fd, 0o600)  # an older, looser file keeps its mode otherwise
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+
+
+def _redact(touched: dict, accounts: list[Account]) -> dict:
+    """Org policy: an admin never reads a staff member's filter contents."""
+    ws = {a.id for a in accounts if a.provider == "google_workspace"}
+    out = {}
+    for acct, items in touched.items():
+        if acct in ws:
+            hidden = [i for i in items if i.startswith("filters:")]
+            items = [i for i in items if not i.startswith("filters:")]
+            if hidden:
+                items.append(f"filters: {len(hidden)} not in baseline (contents withheld)")
+        out[acct] = items
+    return out
+
+
+def _dev(path: Path) -> int:
+    return (path if path.exists() else path.parent).stat().st_dev
+
+
+def _same_device(a: Path, b: Path) -> bool:
+    return _dev(a) == _dev(b)
+
+
+class Session:
+    """An open vault: keeps passphrase and key in memory for the life of the process."""
+
+    def __init__(self, a, create: bool = False):
+        k = a.keyfile or os.environ.get("PANIC_KEYFILE")
+        if not k:
+            raise CliError("Give --keyfile or set PANIC_KEYFILE.")
+        self.path, self.keypath = Path(a.vault).expanduser(), Path(k).expanduser()
+        self.log_path = Path(f"{self.path}.log.jsonl")
+        self.new = self.new_key = False
+        if self.path.exists():
+            if not self.keypath.exists():
+                raise CliError(f"Key file not found: {self.keypath}")
+            self.key = self.keypath.read_bytes()
+            self.passphrase = getpass.getpass("Passphrase: ")
+            self.data = vault.load(self.path, self.passphrase, self.key)
+            if _same_device(self.keypath, self.path):
+                _warn("Warning: the key file and the vault are on the same device; keep the key file elsewhere.")
+        elif create:
+            self.new = True
+            self.new_key = not self.keypath.exists()
+            self.key = vault.new_keyfile() if self.new_key else self.keypath.read_bytes()
+            if len(self.key) != 32:
+                raise CliError(f"{self.keypath} is not a valid key file (expected 32 bytes).")
+            self.passphrase = getpass.getpass("Choose a passphrase: ")
+            if not self.passphrase:
+                raise CliError("The passphrase must not be empty.")
+            if getpass.getpass("Repeat the passphrase: ") != self.passphrase:
+                raise CliError("The passphrases do not match.")
+            self.data = {"accounts": [], "edges": [], "baselines": {}, "credentials": {}, "released": []}
+        else:
+            raise CliError(f"No vault at {self.path}. Run `panic arm` first.")
+
+    @property
+    def accounts(self) -> list[Account]:
+        return [Account(**x) for x in self.data["accounts"]]
+
+    @property
+    def edges(self) -> list[tuple[str, str]]:
+        return [tuple(e) for e in self.data["edges"]]
+
+    def save(self) -> None:
+        if self.new:
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self.new_key:  # before the vault: a vault without its key file is unopenable
+            self.keypath.parent.mkdir(parents=True, exist_ok=True)
+            _private_write(self.keypath, self.key, exclusive=True)
+        vault.save(self.path, self.data, self.passphrase, self.key)
+        if self.new_key:
+            print(f"Key file written to {self.keypath}. Move it to a USB stick or second device now; "
+                  "the vault cannot be opened without it.")
+        self.new = self.new_key = False
+
+    def log(self, entry: dict) -> None:
+        if not self.log_path.exists():  # log.append would create it world-readable
+            _private_write(self.log_path, b"")
+        log.append(self.log_path, entry)
+
+    def upsert(self, account: Account, snap: dict | None) -> None:
+        self.data["accounts"] = [x for x in self.data["accounts"] if x["id"] != account.id] + [asdict(account)]
+        if snap is not None:
+            self.data["baselines"][account.id] = snap
+
+
+def _connectors(a, s: Session) -> dict:
+    if a.connectors is not None:
+        return a.connectors
+    from panic.google_workspace import Workspace
+    cred, out = s.data["credentials"], {}
+    if "google_personal" in cred:
+        out["google_personal"] = google_personal.Personal(cred["google_personal"])
+    if "google_workspace" in cred:
+        w = cred["google_workspace"]
+        out["google_workspace"] = Workspace(w["sa_info"], w["admin"], w["domain"])
+    return out
+
+
+def _unprotected(s: Session) -> list[str]:
+    return [x.id for x in s.accounts if not x.protected]
+
+
+def outcome_to_json(o: Outcome) -> dict:
+    return json.loads(json.dumps(asdict(o)))  # enums become their values
+
+
+def outcome_from_json(d: dict) -> Outcome:
+    def step(x):
+        return Step(**{**x, "phase": Phase(x["phase"]), "tier": Tier(x["tier"]), "watch": WatchPolicy(x["watch"])})
+
+    results = [Result(step(r["step"]), Status(r["status"]), Evidence(r["evidence"]) if r["evidence"] else None,
+                      r["detail"], r["at"]) for r in d["results"]]
+    return Outcome(results, d["touched"], d["started_at"])
+
+
+def _last_outcome(s: Session) -> Outcome:
+    if "last_outcome" not in s.data:
+        raise CliError("No press has been recorded yet. Run `panic press` first.")
+    return outcome_from_json(s.data["last_outcome"])
