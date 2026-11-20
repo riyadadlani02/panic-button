@@ -1,9 +1,11 @@
 """Shared command-line plumbing: the open vault, private files, redaction and outcome (de)serialisation."""
+import fcntl
 import getpass
 import json
 import os
 import sys
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
@@ -99,17 +101,30 @@ class Session:
     def update(self, change: Callable[[dict], None]) -> None:
         """Reload, apply this writer's change, save: keys another process saved meanwhile survive."""
         if self.new:
-            change(self.data)
-            self._create()
-            return
-        fresh = vault.load(self.path, self.passphrase, self.key)
-        change(fresh)
-        vault.save(self.path, fresh, self.passphrase, self.key)
-        self.data = fresh
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with self._locked():
+            if self.new:
+                if self.path.exists():  # another command created it first; saving would erase its accounts
+                    raise CliError(f"A vault appeared at {self.path} meanwhile; nothing was saved. Run the command again.")
+                change(self.data)
+                self._create()
+                return
+            fresh = vault.load(self.path, self.passphrase, self.key)
+            change(fresh)
+            vault.save(self.path, fresh, self.passphrase, self.key)
+            self.data = fresh
+
+    @contextmanager
+    def _locked(self):
+        # The whole reload-change-save holds it, so two commands never overwrite each other's change.
+        fd = os.open(f"{self.path}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)  # releases the lock
 
     def _create(self) -> None:
-        if self.new:
-            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.new_key:  # before the vault: a vault without its key file is unopenable
             self.keypath.parent.mkdir(parents=True, exist_ok=True)
             _private_write(self.keypath, self.key, exclusive=True)

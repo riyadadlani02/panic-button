@@ -56,3 +56,15 @@ def test_entries_skips_unreadable_lines(tmp_path):
     log.append(p, {"e": 1})
     with p.open("a") as f: f.write("not json\n[1]\n")
     assert [e["e"] for e in log.entries(p)] == [1]
+
+
+def test_two_writers_never_fork_the_chain(tmp_path):
+    import threading
+    p = tmp_path / "log.jsonl"
+    def writer(n):
+        for k in range(50):
+            log.append(p, {"w": n, "k": k})
+    ts = [threading.Thread(target=writer, args=(n,)) for n in (1, 2)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+    assert len(log.entries(p)) == 100 and log.verify(p)

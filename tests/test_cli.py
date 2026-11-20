@@ -842,3 +842,29 @@ def test_report_lists_what_the_watch_put_back(armed, patch_watch, capsys):
     section = out.split("## Put back during the watch")[1]
     assert "- `mail`: Turn off forwarding put back 2 times, last " in section
     assert section.count("  - `forwarding: on -> thief@x`") == 1
+
+
+def test_two_vault_writers_lose_no_change(armed):
+    import threading
+    from types import SimpleNamespace
+    from panic.session import Session
+    with patch("getpass.getpass", return_value=PW):
+        sessions = [Session(SimpleNamespace(vault=str(vpath), keyfile=str(kpath))) for _ in range(2)]
+    def writer(n):
+        for k in range(8):
+            sessions[n].update(lambda d: d.__setitem__(f"w{n}-{k}", True))
+    ts = [threading.Thread(target=writer, args=(n,)) for n in (0, 1)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+    d = open_vault()
+    assert all(d.get(f"w{n}-{k}") for n in (0, 1) for k in range(8))
+    assert stat.S_IMODE(Path(f"{vpath}.lock").stat().st_mode) == 0o600
+
+
+def test_first_creation_refuses_when_a_vault_appeared_meanwhile(bare, capsys):
+    def whoami(token):  # another command creates the vault while this one waits for sign-in
+        vpath.parent.mkdir()
+        vpath.write_bytes(b"other")
+        return "me@example.com"
+    rc, _ = arm_personal(answers=["y", "y"], whoami=whoami)
+    assert rc == 1 and vpath.read_bytes() == b"other" and "appeared" in capsys.readouterr().err

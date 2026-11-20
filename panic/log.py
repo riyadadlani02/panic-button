@@ -1,4 +1,5 @@
 """Hash-chained log: each line commits to the bytes of the line before it."""
+import fcntl
 import hashlib
 import json
 import time
@@ -10,13 +11,14 @@ def _digest(line: bytes) -> str:
 
 
 def append(path: Path, entry: dict) -> None:
-    data = path.read_bytes() if path.exists() else b""
-    # A torn tail must not merge with the new line; the chain then breaks visibly.
-    prefix = b"\n" if data and not data.endswith(b"\n") else b""
-    lines = data.splitlines()
-    prev = _digest(lines[-1]) if lines else ""
-    record = {**entry, "at": time.time(), "prev": prev}
     with path.open("ab") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)  # two writers reading the same last line would fork the chain
+        data = path.read_bytes()
+        # A torn tail must not merge with the new line; the chain then breaks visibly.
+        prefix = b"\n" if data and not data.endswith(b"\n") else b""
+        lines = data.splitlines()
+        prev = _digest(lines[-1]) if lines else ""
+        record = {**entry, "at": time.time(), "prev": prev}
         f.write(prefix + json.dumps(record).encode() + b"\n")
 
 
