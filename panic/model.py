@@ -1,0 +1,70 @@
+"""Shared types; every later module imports these."""
+from dataclasses import dataclass
+from enum import StrEnum
+
+
+class Phase(StrEnum):
+    FREEZE = "freeze"
+    PURGE = "purge"
+
+
+class Tier(StrEnum):
+    API = "api"
+    GUIDED = "guided"
+
+
+class Evidence(StrEnum):
+    VERIFIED = "verified"
+    ACCEPTED = "accepted"
+    OWNER_CONFIRMED = "owner_confirmed"
+
+
+class Status(StrEnum):
+    LOCKED = "locked"
+    NEEDS_YOU = "needs_you"
+    STILL_OPEN = "still_open"
+
+
+class WatchPolicy(StrEnum):
+    REAPPLY = "reapply"
+    REPORT = "report"
+    NONE = "none"
+
+
+@dataclass(frozen=True)
+class Account:
+    id: str
+    provider: str
+    protected: bool = False
+
+
+@dataclass(frozen=True)
+class Step:
+    account: str
+    action: str
+    phase: Phase
+    tier: Tier
+    title: str
+    link: str | None = None
+    watch: WatchPolicy = WatchPolicy.NONE
+    lingers_s: int = 0
+
+
+@dataclass
+class Result:
+    step: Step
+    status: Status
+    evidence: Evidence | None = None
+    detail: str = ""
+    at: float = 0.0
+
+
+@dataclass
+class Outcome:
+    results: list[Result]
+    touched: dict[str, list[str]]
+    started_at: float
+
+
+Edges = list[tuple[str, str]]  # (a, b): control of a can reset b
+Snapshot = dict[str, list[str]]  # category -> human-readable items
