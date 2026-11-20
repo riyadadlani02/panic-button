@@ -38,6 +38,14 @@ uv sync
 uv run panic --help
 ```
 
+## Try it without an account
+
+```
+PYTHONPATH=. uv run python demo/sandbox_demo.py
+```
+
+It runs the real vault, engine and `panic` commands against an in-memory mail provider: an attacker adds forwarding, a hiding filter and a rogue app, the press removes them, and the attacker re-adds forwarding during a shortened watch, which puts it back. Nothing touches the network.
+
 ## Setup: personal Gmail
 
 1. In Google Cloud Console create a project, enable the Gmail API, configure the OAuth consent screen and add yourself as a test user.
@@ -94,7 +102,7 @@ Global options: `--vault PATH` (default `~/.panic/panic.vault`), `--keyfile PATH
 | `watch` | Resume the 24-hour watch. |
 | `release --user ID` | Unsuspend a Workspace user with a temporary password, shown once. |
 | `report` | Re-render the report from the last press, list earlier reports; warns if the audit log was changed. |
-| `removed --user ID` | Print everything the last press removed from that account, and what was outside its baseline, unredacted, so it can be restored. |
+| `removed --user ID` | Print, for every press newest first, what it removed from that account and what was outside its baseline, then what the watch removed; unredacted, so it can be restored. |
 | `export DEST` | Copy the vault file. |
 
-Each press writes its report to `<vault>.report-<YYYYMMDDTHHMMSSZ>.md` and `.json`, named by the press start time (UTC) and never overwritten by a later press; the vault keeps every press. The hash-chained audit log is `<vault>.log.jsonl`. All are readable only by you.
+Each press writes its report to `<vault>.report-<YYYYMMDDTHHMMSSZ>.md` and `.json`, named by the press start time (UTC) and never overwritten by a later press; the vault keeps every press. The hash-chained audit log is `<vault>.log.jsonl`. All are readable only by you. The report's `Put back during the watch` section lists each setting the watch re-applied, how often, and what it removed (Workspace filter contents withheld; `panic removed` shows them).
