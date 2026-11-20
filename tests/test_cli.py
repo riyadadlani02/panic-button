@@ -762,3 +762,10 @@ def test_guard_names_an_exception_without_a_message(capsys):
         raise KeyboardInterrupt
     _guard("save", interrupted)
     assert "could not save: KeyboardInterrupt" in capsys.readouterr().err
+
+
+def test_unreadable_log_does_not_hide_the_report(armed, patch_watch, monkeypatch, capsys):
+    monkeypatch.setattr(log, "entries", lambda p: (_ for _ in ()).throw(PermissionError("denied")))
+    assert cli("press", "--all") == 0
+    cap = capsys.readouterr()
+    assert "## Locked" in cap.out and "denied" in cap.err

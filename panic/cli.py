@@ -60,7 +60,12 @@ def _report_path(s: Session, o: Outcome, ext: str) -> Path:
 
 def _render(s: Session, outcome: Outcome) -> tuple[str, dict]:
     shown = replace(outcome, touched=_redact(outcome.touched, s.accounts), removed=_redact(outcome.removed, s.accounts))
-    return report.render(shown, time.time(), log.entries(s.log_path))
+    try:
+        events = log.entries(s.log_path)
+    except OSError as e:  # the report must still be shown
+        _warn(f"Warning: could not read the audit log: {e}")
+        events = []
+    return report.render(shown, time.time(), events)
 
 
 def _write_report(s: Session, outcome: Outcome, md: str, data: dict) -> None:
