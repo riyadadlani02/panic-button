@@ -1,3 +1,6 @@
+import threading
+import time
+
 import pytest
 from fake import FakeConnector
 
@@ -99,20 +102,61 @@ def test_non_bool_check_result_is_not_verified():
     r = by(run(c), "mail", "freeze")
     assert r.status is Status.STILL_OPEN and "1" in r.detail
 
-def test_interrupt_while_waiting_on_api_steps():
-    # KeyboardInterrupt raised in a worker is re-raised by future.result() in the calling thread.
-    c = mk(); orig = c.run
+def _wait_until(pred, timeout=5):
+    end = time.monotonic() + timeout
+    while not pred() and time.monotonic() < end:
+        time.sleep(0.005)
+    assert pred()
+
+
+def _interrupting(c, release=None):
+    """mail/freeze raises Ctrl-C once bank's freeze steps have finished; bank/purge-phase never runs."""
+    orig = c.run
     def run_(step, baseline):
-        if step.account == "mail" and step.action == "freeze": raise KeyboardInterrupt
+        key = f"{step.account}/{step.action}"
+        if key == "mail/freeze":
+            _wait_until(lambda: {"bank/freeze"} | ({"bank/signout"} if release is None else set()) <= set(c.ran))
+            time.sleep(0.1)  # let those workers publish their results
+            raise KeyboardInterrupt
+        if key == "bank/signout" and release is not None:
+            release.wait(10)
         orig(step, baseline)
     c.run = run_
+
+
+def test_interrupt_keeps_finished_results_and_marks_the_rest():
+    c = mk(); _interrupting(c)
     out = run(c, confirm=lambda s: pytest.fail("asked after interrupt"))
-    assert by(out, "mail", "freeze").detail == "interrupted"
-    assert by(out, "mail", "freeze").status is Status.STILL_OPEN
+    plan = compile_plan(A, E, {"fake": c})
+    assert [(r.step.account, r.step.action) for r in out.results if r.step.action != "reopenable"] == [(s.account, s.action) for s in plan]
+    assert by(out, "bank", "freeze").status is Status.LOCKED and by(out, "bank", "freeze").evidence is Evidence.VERIFIED
+    assert by(out, "mail", "freeze").status is Status.STILL_OPEN and by(out, "mail", "freeze").detail == "interrupted"
+    assert not [k for k in c.ran if k.endswith("/purge")]
     for acct in ("mail", "bank"):
+        assert by(out, acct, "purge").detail == "interrupted"
         assert by(out, acct, "guided").status is Status.NEEDS_YOU and by(out, acct, "guided").detail == "not asked"
-        assert by(out, acct, "purge").status in (Status.STILL_OPEN, Status.LOCKED)
-    assert len(out.results) >= 8
+
+
+def test_interrupt_in_guided_check_keeps_earlier_results():
+    c = mk(); orig = c.check
+    def check(step, baseline):
+        if step.action == "guided" and step.account == "bank": raise KeyboardInterrupt
+        return orig(step, baseline)
+    c.check = check
+    out = run(c)
+    assert by(out, "mail", "guided").status is Status.LOCKED
+    g = by(out, "bank", "guided")
+    assert g.status is Status.NEEDS_YOU and g.detail == "not asked"
+    assert by(out, "bank", "freeze").status is Status.LOCKED
+
+
+def test_press_returns_while_a_provider_call_is_still_blocked():
+    c = mk(); release = threading.Event(); _interrupting(c, release)
+    try:
+        out = run(c, confirm=lambda s: pytest.fail("asked after interrupt"))
+        assert not release.is_set() and by(out, "bank", "signout").detail == "interrupted"
+    finally:
+        release.set()
 
 def test_protected_account_is_not_read_and_not_an_open_resetter():
     c = mk(); reads = []; c.snapshot = lambda a: reads.append(a.id) or {}

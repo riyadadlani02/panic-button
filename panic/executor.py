@@ -1,7 +1,7 @@
 """Connector contract, plan compilation, and the press that runs a plan and records evidence."""
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Protocol
 
 from panic.graph import lock_order, resetters
@@ -68,44 +68,43 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
         results = [done(s, Status.STILL_OPEN, detail="dry run") for s in plan]
     else:
         finished: dict[Step, Result] = {}
-        interrupted = False
-        with ThreadPoolExecutor(max_workers=16) as pool:
+        futures: dict[Step, Future] = {}
+        guided = [s for s in plan if s.tier is Tier.GUIDED]
+        # Hand-managed pool: leaving a `with` block would join in-flight provider calls on interrupt.
+        pool = ThreadPoolExecutor(max_workers=16)
+        try:
             for phase in (Phase.FREEZE, Phase.PURGE):
                 steps = [s for s in plan if s.tier is Tier.API and s.phase == phase]
-                futures = [(s, pool.submit(api, s)) for s in steps]
+                futures.update({s: pool.submit(api, s) for s in steps})
+                for s in steps:
+                    finished[s] = futures[s].result()
+            for step in guided:
+                if not confirm(step):
+                    finished[step] = done(step, Status.NEEDS_YOU)
+                    continue
                 try:
-                    for s, f in futures:
-                        finished[s] = f.result()
-                except KeyboardInterrupt:
-                    interrupted = True
-                    pool.shutdown(wait=False, cancel_futures=True)
-                    break
+                    ok = readback(step)
+                except Exception as e:
+                    finished[step] = done(step, Status.STILL_OPEN, detail=str(e))
+                    continue
+                if ok is False:
+                    finished[step] = done(step, Status.NEEDS_YOU, detail="marked done but the read-back still shows it open")
+                else:
+                    finished[step] = done(step, Status.LOCKED, Evidence.VERIFIED if ok is True else Evidence.OWNER_CONFIRMED)
+        except (KeyboardInterrupt, Exception):  # Ctrl-C, EOF or a raising confirm: keep what is gathered
+            pass
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         for s in plan:
-            if s.tier is Tier.API and s not in finished:
+            if s in finished:
+                continue
+            f = futures.get(s)
+            if f is not None and f.done() and not f.cancelled() and f.exception() is None:
+                finished[s] = f.result()  # finished while the interrupt was handled
+            elif s.tier is Tier.API:
                 finished[s] = done(s, Status.STILL_OPEN, detail="interrupted")
-        guided = [s for s in plan if s.tier is Tier.GUIDED]
-        for i, step in enumerate(guided):
-            try:
-                if interrupted:
-                    raise KeyboardInterrupt
-                said_done = confirm(step)
-            except (Exception, KeyboardInterrupt):
-                # Keep what is gathered if the owner bails out mid-walkthrough.
-                for s in guided[i:]:
-                    finished[s] = done(s, Status.NEEDS_YOU, detail="not asked")
-                break
-            if not said_done:
-                finished[step] = done(step, Status.NEEDS_YOU)
-                continue
-            try:
-                ok = readback(step)
-            except Exception as e:
-                finished[step] = done(step, Status.STILL_OPEN, detail=str(e))
-                continue
-            if ok is False:
-                finished[step] = done(step, Status.NEEDS_YOU, detail="marked done but the read-back still shows it open")
             else:
-                finished[step] = done(step, Status.LOCKED, Evidence.VERIFIED if ok is True else Evidence.OWNER_CONFIRMED)
+                finished[s] = done(s, Status.NEEDS_YOU, detail="not asked")
         results = [finished[s] for s in plan]
 
         has_steps = {s.account for s in plan}
