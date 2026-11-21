@@ -28,3 +28,11 @@ def resetters(account: str, edges: Edges) -> set[str]:
     for a, b in edges:
         rev[b].append(a)
     return _reach(account, rev) - {account}
+
+
+def downstream(account: str, edges: Edges) -> list[str]:
+    adj: dict[str, list[str]] = defaultdict(list)
+    for a, b in edges:
+        adj[a].append(b)
+    rest = _reach(account, adj) - {account}
+    return [account, *lock_order(sorted(rest), edges)]

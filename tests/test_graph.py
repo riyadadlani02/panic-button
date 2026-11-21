@@ -21,3 +21,7 @@ def test_resetters_are_transitive():
 def test_unconnected_account_is_kept():
     order = graph.lock_order(["x", "mail", "bank"], E)
     assert order[0] == "mail" and sorted(order) == ["bank", "mail", "x"]
+
+
+def test_downstream_is_root_first_and_skips_upstream():
+    assert graph.downstream("a", [("a", "b"), ("b", "c"), ("x", "a")]) == ["a", "b", "c"]
