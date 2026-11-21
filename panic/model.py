@@ -80,6 +80,7 @@ class Outcome:
     touched: dict[str, list[str]]
     started_at: float
     removed: dict[str, list[str]] = field(default_factory=dict)  # per account: "category: item" the press took away
+    triggers: list[str] = field(default_factory=list)  # what made the guard press, when it did
 
 
 Edges = list[tuple[str, str]]  # (a, b): control of a can reset b

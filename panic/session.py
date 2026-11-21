@@ -13,6 +13,9 @@ from panic import google_personal, log, vault
 from panic.model import Account, Evidence, Outcome, Phase, Result, Status, Step, Tier, WatchPolicy
 
 YES = ("y", "yes")
+ORG_PROVIDERS = {"google_workspace", "microsoft_365", "slack"}
+RULE_CATEGORIES = ("filters", "inbox_rules")
+WATCH_HOURS = 24
 
 
 class CliError(Exception):
@@ -37,14 +40,15 @@ def _private_write(path: Path, data: bytes, exclusive: bool = False) -> None:
 
 def _redact(touched: dict, accounts: list[Account]) -> dict:
     """Org policy: an admin never reads a staff member's filter contents."""
-    ws = {a.id for a in accounts if a.provider == "google_workspace"}
+    org = {a.id for a in accounts if a.provider in ORG_PROVIDERS}
     out = {}
     for acct, items in touched.items():
-        if acct in ws:
-            hidden = [i for i in items if i.startswith("filters:")]
-            items = [i for i in items if not i.startswith("filters:")]
-            if hidden:
-                items.append(f"filters: {len(hidden)} not in baseline (contents withheld)")
+        if acct in org:
+            for cat in RULE_CATEGORIES:
+                hidden = [i for i in items if i.startswith(f"{cat}:")]
+                items = [i for i in items if not i.startswith(f"{cat}:")]
+                if hidden:
+                    items.append(f"{cat}: {len(hidden)} not in baseline (contents withheld)")
         out[acct] = items
     return out
 
@@ -166,6 +170,31 @@ def _connectors(a, data: dict) -> dict:
     return out
 
 
+def _reload(a, s: Session, conns: dict, last: dict) -> dict:
+    """The vault as saved now (the last good copy if it cannot be read); connectors refreshed in place."""
+    try:
+        fresh = vault.load(s.path, s.passphrase, s.key)
+    except Exception:
+        return last
+    new = _connectors(a, fresh)
+    if new is not conns:
+        conns.clear()
+        conns.update(new)
+    return fresh
+
+
+def _recent_results(outcomes: list[Outcome], now: float) -> list[Result]:
+    """Results of presses inside the watch window; a later press wins, unless it would unwatch a lock."""
+    latest: dict[tuple[str, str], Result] = {}
+    for o in outcomes:
+        if now - o.started_at < WATCH_HOURS * 3600:
+            for r in o.results:
+                k = (r.step.account, r.step.action)
+                if r.status is Status.LOCKED or k not in latest or latest[k].status is not Status.LOCKED:
+                    latest[k] = r
+    return list(latest.values())
+
+
 def _unprotected(s: Session) -> list[str]:
     return [x.id for x in s.accounts if not x.protected]
 
@@ -180,7 +209,7 @@ def outcome_from_json(d: dict) -> Outcome:
 
     results = [Result(step(r["step"]), Status(r["status"]), Evidence(r["evidence"]) if r["evidence"] else None,
                       r["detail"], r["at"]) for r in d["results"]]
-    return Outcome(results, d["touched"], d["started_at"], d.get("removed", {}))
+    return Outcome(results, d["touched"], d["started_at"], d.get("removed", {}), d.get("triggers", []))
 
 
 def _outcomes(s: Session) -> list[Outcome]:

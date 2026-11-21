@@ -9,18 +9,18 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from panic import executor, google_personal, log, report, vault
+from panic import executor, google_personal, log, notify, report
 from panic.cli_arm import _plan_lines, cmd_arm, cmd_rehearse
+from panic.cli_guard import cmd_guard
 from panic.graph import lock_order, resetters
-from panic.model import Outcome, Result, Status, Step
-from panic.session import (CliError, Session, _connectors, _last_outcome, _outcomes, _private_write,
-                           _record_outcome, _redact, _same_device, _unprotected, _warn, _yes,
+from panic.model import Outcome, Step
+from panic.session import (WATCH_HOURS, CliError, Session, _connectors, _last_outcome, _outcomes, _private_write,
+                           _recent_results, _record_outcome, _redact, _reload, _same_device, _unprotected, _warn, _yes,
                            outcome_from_json, outcome_to_json)
 from panic.vault import VaultError
 
 DEFAULT_VAULT = "~/.panic/panic.vault"
 STALE_DAYS = 30
-WATCH_HOURS = 24
 
 
 class _Parser(argparse.ArgumentParser):
@@ -98,34 +98,20 @@ def _watch(a, s: Session, outcomes: list[Outcome], conns: dict) -> int:
     if hours <= 0:
         print("The 24-hour watch window has ended.")
         return 0
-    latest: dict[tuple[str, str], Result] = {}  # a later press's result wins, unless it would unwatch a lock
-    for o in outcomes:
-        if now - o.started_at < WATCH_HOURS * 3600:
-            for r in o.results:
-                k = (r.step.account, r.step.action)
-                if r.status is Status.LOCKED or k not in latest or latest[k].status is not Status.LOCKED:
-                    latest[k] = r
-    released, baselines = set(s.data.get("released", [])), dict(s.data["baselines"])
+    results = _recent_results(outcomes, now)
+    baselines, last = dict(s.data["baselines"]), s.data
 
     def reload() -> set[str]:
-        nonlocal released
-        try:
-            fresh = vault.load(s.path, s.passphrase, s.key)
-        except Exception:
-            return released  # keep the last state read
-        released = set(fresh.get("released", []))
+        nonlocal last
+        last = _reload(a, s, conns, last)
         # Refreshed in place, so a reconnected token or an approved baseline applies from the next pass.
         baselines.clear()
-        baselines.update(fresh["baselines"])
-        new = _connectors(a, fresh)
-        if new is not conns:
-            conns.clear()
-            conns.update(new)
-        return released
+        baselines.update(last["baselines"])
+        return set(last.get("released", []))
 
     print(f"Watching for {hours:.1f} more hours. Press Ctrl-C to stop; resume with `panic watch`.")
     try:
-        executor.watch(list(latest.values()), conns, s.accounts, baselines, reload, s.log, hours=hours)
+        executor.watch(results, conns, s.accounts, baselines, reload, s.log, hours=hours)
     except KeyboardInterrupt:
         print("Watch stopped. Resume with `panic watch`.")
     return 0
@@ -283,6 +269,11 @@ def _parser() -> argparse.ArgumentParser:
     press.add_argument("--user", action="append", default=[], metavar="ID", help="account to lock (repeatable)")
     press.add_argument("--all", action="store_true", help="every account except protected ones")
     press.add_argument("--dry-run", action="store_true", help="show the plan; change nothing")
+    g = add("guard", cmd_guard, "Watch armed accounts and press automatically when one looks taken over.")
+    g.add_argument("--interval", type=float, default=300, metavar="SECONDS", help="seconds between passes (min 30)")
+    g.add_argument("--on-detect", choices=["press", "contain", "alert"], default="press")
+    g.add_argument("--dry-run", action="store_true", help="read and report; notify, press and save nothing")
+    g.add_argument("--passes", type=int, default=0, help=argparse.SUPPRESS)
     add("watch", cmd_watch, "Resume the 24-hour watch after a press.")
     rel = add("release", cmd_release, "Unsuspend one account with a temporary password.")
     rel.add_argument("--user", required=True, metavar="ID")
@@ -294,11 +285,13 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None, connectors: dict | None = None, authorize=None, whoami=None) -> int:
+def main(argv: list[str] | None = None, connectors: dict | None = None, authorize=None, whoami=None,
+         sleep=time.sleep, notifier=notify.notify) -> int:
     try:
         a = _parser().parse_args(argv)
         a.connectors, a.authorize = connectors, authorize or google_personal.authorize
         a.whoami = whoami or google_personal.signed_in_address
+        a.sleep, a.notifier = sleep, notifier
         return a.fn(a)
     except SystemExit as e:  # --help, or a usage error already printed
         return int(e.code or 0)

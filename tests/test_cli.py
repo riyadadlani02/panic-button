@@ -11,7 +11,7 @@ from fake import FakeConnector
 
 from panic import executor, log, vault
 from panic.cli import main, outcome_from_json, outcome_to_json
-from panic.model import Evidence, Outcome, Phase, Result, Status, Step, Tier, WatchPolicy
+from panic.model import Evidence, Finding, Outcome, Severity, Phase, Result, Status, Step, Tier, WatchPolicy
 
 PW = "pw"
 CLIENT = {"installed": {"client_id": "i"}}
@@ -72,7 +72,7 @@ def press_at(monkeypatch, t):
     monkeypatch.setattr(executor, "press", lambda *a, **k: REAL_PRESS(*a, now=lambda: t, **k))
 
 
-def cli(*args, passphrase=PW, answers=(), connectors=None, authorize=None, whoami=None):
+def cli(*args, passphrase=PW, answers=(), connectors=None, authorize=None, whoami=None, **extra):
     it = iter(answers)
     if whoami is None:  # by default the owner signs in as the account being armed
         who = args[args.index("--personal") + 1] if "--personal" in args else ""
@@ -87,7 +87,7 @@ def cli(*args, passphrase=PW, answers=(), connectors=None, authorize=None, whoam
     with patch("getpass.getpass", return_value=passphrase), patch("builtins.input", fake_input):
         return main(["--vault", str(vpath), "--keyfile", str(kpath), *args],
                     connectors={"fake": fake} if connectors is None else connectors, authorize=authorize,
-                    whoami=whoami)
+                    whoami=whoami, **extra)
 
 
 # -- the brief's tests ---------------------------------------------------
@@ -414,11 +414,11 @@ def test_rehearse_approved_change_replaces_baseline_and_prints_plan(armed, capsy
 
 def test_report_still_printed_when_vault_save_fails(armed, patch_watch, monkeypatch, capsys):
     real = vault.save
-    monkeypatch.setattr("panic.cli.vault.save", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr("panic.vault.save", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
     assert cli("press", "--all") == 0
     cap = capsys.readouterr()
     assert "## Locked" in cap.out and "disk full" in cap.err and patch_watch.called
-    monkeypatch.setattr("panic.cli.vault.save", real)
+    monkeypatch.setattr("panic.vault.save", real)
 
 
 def test_report_still_printed_when_report_write_fails(armed, patch_watch, monkeypatch, capsys):
@@ -877,3 +877,133 @@ def test_signed_in_mismatch_names_both_addresses_and_the_gmail_variant_rule(bare
     assert rc == 1 and "m.e@googlemail.com" in err and "me@example.com" in err
     assert ("Gmail treats dotted and googlemail.com variants as the same mailbox, but they must be typed here "
             "exactly as Google shows the primary address.") in err
+
+
+# -- guard ---------------------------------------------------------------
+
+HIDE = "A mail rule hides or deletes incoming mail."
+
+
+def trigger(*accounts, items=("rule-json",)):
+    fake.signals = lambda acct, snap, base: [
+        Finding(acct.id, "rule_hides_mail", Severity.TRIGGER, HIDE, tuple(items)) for _ in [0] if acct.id in accounts]
+
+
+class Guard:
+    def __init__(self):
+        self.sleeps, self.notes = [], []
+
+    def run(self, *args, **kw):
+        return cli("guard", *args, answers=["y"] * 9, sleep=self.sleeps.append,
+                   notifier=lambda t, x: self.notes.append((t, x)), **kw)
+
+
+@pytest.fixture
+def guard(armed):
+    fake.steps = _steps() + [Step("", "forward", Phase.PURGE, Tier.GUIDED, "Check forwarding"),
+                             Step("", "rules", Phase.FREEZE, Tier.API, "Rules", watch=WatchPolicy.REAPPLY)]
+    return Guard()
+
+
+def test_guard_presses_unattended_and_records_why(guard):
+    trigger("mail")
+    assert guard.run("--passes", "1") == 0
+    o = open_vault()["outcomes"][-1]
+    assert o["triggers"] and o["triggers"][0].startswith("rule_hides_mail: ")
+    guided = [r for r in o["results"] if r["step"]["tier"] == "guided"]
+    assert guided and all(r["status"] == "needs_you" for r in guided)  # input was never asked
+    assert "## What triggered this press" in latest_report().read_text()
+    assert guard.notes[0][0] == "panic: mail"
+
+
+def test_guard_presses_once_across_passes_and_restarts(guard):
+    trigger("mail")
+    assert guard.run("--passes", "2") == 0 and len(guard.sleeps) == 1
+    assert len(open_vault()["outcomes"]) == 1
+    assert guard.run("--passes", "1") == 0  # a new Session: the cooldown survived in the vault
+    assert len(open_vault()["outcomes"]) == 1
+
+
+def test_alert_mode_notifies_and_saves_state_but_never_presses(guard):
+    trigger("mail")
+    assert guard.run("--on-detect", "alert", "--passes", "1") == 0
+    assert "outcomes" not in open_vault() and fake.ran == [] and len(guard.notes) == 1
+    assert open_vault()["guard"]["seen"]
+    guard.run("--on-detect", "alert", "--passes", "1")
+    assert len(guard.notes) == 1  # a restart does not repeat the notice
+
+
+def test_contain_runs_only_reapply_steps(guard):
+    trigger("mail")
+    guard.run("--on-detect", "contain", "--passes", "1")
+    assert sorted(fake.ran) == ["bank/rules", "mail/rules"]
+
+
+def test_dry_run_changes_nothing(guard):
+    trigger("mail")
+    before = open_vault()["version"]
+    assert guard.run("--dry-run", "--passes", "1") == 0
+    assert open_vault()["version"] == before and fake.ran == [] and guard.notes == []
+
+
+def test_interval_under_30_is_one_line_error(guard, capsys):
+    assert guard.run("--interval", "5", "--passes", "1") == 1
+    assert capsys.readouterr().err.count("\n") == 1
+
+
+def test_trigger_downstream_of_another_account_names_resetters_and_spares_them(guard, capsys):
+    trigger("bank")
+    guard.run("--passes", "1")
+    assert "Also check: mail" in capsys.readouterr().out and "Also check: mail" in guard.notes[0][1]
+    assert fake.ran and not any(k.startswith("mail/") for k in fake.ran)
+
+
+def test_org_provider_items_never_leave_the_finding(armed, capsys):
+    key = kpath.read_bytes()
+    d = open_vault()
+    d["accounts"] = [{"id": "staff", "provider": "google_workspace", "protected": False}]
+    d["baselines"], d["edges"] = {"staff": {}}, []
+    vault.save(vpath, d, PW, key)
+    secret = "SECRET-FILTER-CONTENT"
+    trigger("staff", items=(secret,))
+    g = Guard()
+    assert g.run("--passes", "1", connectors={"google_workspace": fake}) == 0
+    out = capsys.readouterr()
+    everything = out.out + out.err + log_path.read_text() + latest_report().read_text() + repr(g.notes)
+    assert secret not in everything and HIDE in log_path.read_text()
+
+
+def test_personal_items_are_shown_in_the_notification(guard):
+    trigger("mail")
+    guard.run("--on-detect", "alert", "--passes", "1")
+    assert "rule-json" in guard.notes[0][1]
+
+
+def test_a_second_guard_is_refused(guard, capsys):
+    import fcntl
+    fd = os.open(f"{vpath}.guard.lock", os.O_RDWR | os.O_CREAT)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        assert guard.run("--passes", "1") == 1
+    finally:
+        os.close(fd)
+    assert "A guard is already running for this vault." in capsys.readouterr().err
+
+
+def test_a_failed_automatic_press_does_not_kill_the_guard(guard, monkeypatch, capsys):
+    trigger("mail")
+    monkeypatch.setattr(executor, "press", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("kaboom")))
+    assert guard.run("--passes", "2") == 0
+    out = capsys.readouterr().out
+    assert "automatic press failed for mail" in out and "kaboom" in out and "panic press" in out
+    assert any(e["event"] == "guard_notice" and "kaboom" in e["detail"] for e in log.entries(log_path))
+    assert "pressed" in open_vault()["guard"] and open_vault()["guard"]["pressed"]["mail"]
+
+
+def test_rehearse_approval_removes_the_account_from_released(armed):
+    d = open_vault()
+    d["released"] = ["mail"]
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    fake.snap = {"filters": ["x"]}
+    cli("rehearse", answers=["y", "n"])
+    assert open_vault()["released"] == []

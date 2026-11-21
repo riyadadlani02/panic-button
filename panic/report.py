@@ -114,6 +114,9 @@ def render(outcome: Outcome, now: float, watch_events=()) -> tuple[str, dict]:
         items = [i for i in locked if i["evidence"] == (ev.value if ev else None)]
         if items:
             md += [f"### {label}", "", *_lines(items), ""]
+    if outcome.triggers:
+        md[md.index("## Locked"):md.index("## Locked")] = ["## What triggered this press", "",
+                                                           *(f"- {_code(t)}" for t in outcome.triggers), ""]
     open_lines = _lines(still) + [
         f"- {_code(w['account'])}: {_code(w['action'])} {w['event']} (seen {w['count']} times, last {_utc(w['last'])})"
         for w in watch]

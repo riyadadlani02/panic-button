@@ -119,3 +119,16 @@ def test_untrusted_text_renders_as_code_not_links():
                                   {"ma`il": ["apps: <b>x</b>"]}), now=1.0)
     assert "- `ma'il`: Do it (`see [here](https://evil.test) <img src=x>`) `https://ok.test/a b`" in md
     assert "- `filters: [x](https://evil.test) 'y'`" in md and "- `apps: <b>x</b>`" in md
+
+
+def test_triggers_section_is_code_spanned_and_after_the_header(outcome):
+    outcome.triggers = ["rule_hides_mail: a rule that hides mail", "x: line\n## Fake `heading`"]
+    md, _ = report.render(outcome, now=1000.0)
+    assert "## What triggered this press" in md
+    assert md.index("## What triggered this press") < md.index("## Locked")
+    assert "- `rule_hides_mail: a rule that hides mail`" in md
+    assert "- `x: line ## Fake 'heading'`" in md
+
+
+def test_no_triggers_no_section(outcome):
+    assert "What triggered" not in report.render(outcome, now=1000.0)[0]

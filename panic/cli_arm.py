@@ -203,5 +203,8 @@ def cmd_rehearse(a) -> int:
     print("Plan:")
     print("\n".join(_plan_lines(executor.compile_plan(s.accounts, s.edges, conns))) or "  (no steps)")
     if approved:  # an unchanged rehearsal must not reset saved_at on an exported copy
-        s.update(lambda d: d["baselines"].update(approved))
+        def change(d: dict) -> None:
+            d["baselines"].update(approved)
+            d["released"] = [r for r in d.get("released", []) if r not in approved]  # enforcement resumes
+        s.update(change)
     return 1 if bad else 0
