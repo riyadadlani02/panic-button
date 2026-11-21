@@ -146,10 +146,10 @@ class Workspace:
                 "pop_enabled" if cat == "imap_pop" and item == "pop" else None)
         return drift(account.id, baseline, snapshot, classify)
 
-    def events(self, account: Account, since: datetime) -> list[Finding]:
+    def events(self, account: Account, since: float) -> list[Finding]:
         self._refuse_admin(account.id)
         kw = {"userKey": account.id, "applicationName": "login",
-              "startTime": since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+              "startTime": datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
         out = []
         while True:
             r = self._call(self._svc("reports", self.admin).activities().list(**kw)) or {}

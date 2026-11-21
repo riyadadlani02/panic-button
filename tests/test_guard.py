@@ -175,3 +175,38 @@ def test_trigger_in_cooldown_does_not_notify_again():
 def test_first_press_works_with_small_now():
     _, acts, *_ = run(conns={"mail": conn([TRIG])}, now=lambda: 10)
     assert len(acts) == 1
+
+
+class EventsFail(FakeConnector):
+    def __init__(self):
+        super().__init__()
+        self.since, self.fail = [], True
+
+    def events(self, account, since):
+        self.since.append(since)
+        if self.fail:
+            self.fail = False
+            raise RuntimeError("down")
+        return []
+
+
+class RealSignature(FakeConnector):
+    def events(self, account, since):
+        assert isinstance(since, float)
+        return []
+
+
+def test_failed_events_read_keeps_the_cursor():
+    c, state = EventsFail(), new_state()
+    state["cursors"]["mail"] = 100.0
+    _, _, notes, *_ = run(conns={"mail": c}, state=state, now=lambda: 500.0)
+    assert [n.code for n in notes] == ["events_unreadable"] and state["cursors"]["mail"] == 100.0
+    run(conns={"mail": c}, state=state, now=lambda: 900.0)
+    assert c.since == [100.0, 100.0] and state["cursors"]["mail"] == 900.0
+
+
+def test_events_receives_a_float_since():
+    c = RealSignature()
+    _, _, notes, *_ = run(conns={"mail": c}, now=lambda: 5.0)
+    assert not notes
+    run(conns={"mail": c}, now=lambda: 6.0)  # stored cursor path too

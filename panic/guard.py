@@ -61,13 +61,14 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
             _handle_notice(_notice(acct.id, "unreadable"), state, dry_run, report)
             continue
         if has_events:
-            since = state["cursors"].get(acct.id, now())
+            t0 = now()  # taken before the call so entries logged during it fall in the next window
+            since = state["cursors"].get(acct.id, t0)
             try:
                 ev = conn.events(acct, since)
-            except Exception:
+                if not dry_run:
+                    state["cursors"][acct.id] = t0
+            except Exception:  # the window stays unread: the cursor does not move
                 ev = [_notice(acct.id, "events_unreadable")]
-            if not dry_run:
-                state["cursors"][acct.id] = now()
             event_triggers = [f for f in ev if f.severity == Severity.TRIGGER]
             notices += [f for f in ev if f.severity == Severity.NOTICE]
         notices += [f for f in snap_found if f.severity == Severity.NOTICE]

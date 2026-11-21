@@ -260,7 +260,7 @@ def test_events_flag_only_suspicious_logins(conn, directory):
     acts = directory.activities().list
     acts().execute.return_value = {"items": [
         {"events": [{"name": "login_success"}]}, {"events": [{"name": "suspicious_login"}]}]}
-    out = conn.events(ACCT, datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc))
+    out = conn.events(ACCT, 1767323045.0)
     assert [(f.code, f.items, f.severity.name) for f in out] == [
         ("provider_flagged_login", ("suspicious_login",), "TRIGGER")]
     acts.assert_called_with(userKey="a@corp.test", applicationName="login", startTime="2026-01-02T03:04:05Z")
@@ -272,7 +272,7 @@ def test_signals_and_events_refuse_the_admin(conn):
     with pytest.raises(ValueError, match="refusing to act"):
         conn.signals(admin, BASE, BASE)
     with pytest.raises(ValueError, match="refusing to act"):
-        conn.events(admin, datetime.now(timezone.utc))
+        conn.events(admin, 0.0)
 
 
 def test_reports_scope_is_requested():
