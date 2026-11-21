@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from panic import executor, google_personal, log, notify, report
+from panic import executor, google_personal, log, microsoft_personal, notify, report
 from panic.cli_arm import _plan_lines, cmd_arm, cmd_rehearse
 from panic.cli_guard import cmd_guard
 from panic.graph import lock_order, resetters
@@ -131,7 +131,7 @@ def cmd_press(a) -> int:
     if saved and (datetime.now(timezone.utc) - saved).days > STALE_DAYS:
         _warn(f"Warning: this vault copy is over {STALE_DAYS} days old and may be stale; "
               "more may be removed than you expect.")
-    conns, accounts = _connectors(a, s.data), s.accounts
+    conns, accounts = _connectors(a, s.data, s), s.accounts
     plan = executor.compile_plan([x for x in accounts if x.id in targets], s.edges, conns)
     if a.dry_run:
         out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, lambda e: None, dry_run=True)
@@ -161,7 +161,7 @@ def cmd_press(a) -> int:
 def cmd_watch(a) -> int:
     s = Session(a)
     _last_outcome(s)  # one clear error when nothing was pressed
-    return _watch(a, s, _outcomes(s), _connectors(a, s.data))
+    return _watch(a, s, _outcomes(s), _connectors(a, s.data, s))
 
 
 def cmd_report(a) -> int:
@@ -207,7 +207,7 @@ def cmd_release(a) -> int:
     acct = next((x for x in s.accounts if x.id == uid and not x.protected), None)
     if acct is None:
         raise CliError(f"Not a valid account: {uid}. Valid ids: {', '.join(_unprotected(s)) or 'none'}.")
-    conn = _connectors(a, s.data).get(acct.provider)
+    conn = _connectors(a, s.data, s).get(acct.provider)
     if not hasattr(conn, "release"):
         raise CliError(f"{acct.provider} accounts cannot be released by this tool.")
     ms = acct.provider == "microsoft_365"
@@ -258,6 +258,7 @@ def _parser() -> argparse.ArgumentParser:
 
     arm = add("arm", cmd_arm, "Add an account (or a Workspace domain) and record its baseline.")
     arm.add_argument("--personal", metavar="EMAIL")
+    arm.add_argument("--microsoft-personal", metavar="EMAIL", help="arm your own Outlook.com or Hotmail account")
     arm.add_argument("--client-secrets", metavar="FILE", help="your Google OAuth desktop client file")
     arm.add_argument("--reconnect", action="store_true", help="re-authorise an armed account only")
     arm.add_argument("--workspace", action="store_true")
@@ -297,11 +298,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, connectors: dict | None = None, authorize=None, whoami=None,
-         sleep=time.sleep, notifier=notify.notify) -> int:
+         ms_authorize=None, sleep=time.sleep, notifier=notify.notify) -> int:
     try:
         a = _parser().parse_args(argv)
         a.connectors, a.authorize = connectors, authorize or google_personal.authorize
         a.whoami = whoami or google_personal.signed_in_address
+        a.ms_authorize = ms_authorize or microsoft_personal.authorize
         a.sleep, a.notifier = sleep, notifier
         return a.fn(a)
     except SystemExit as e:  # --help, or a usage error already printed

@@ -34,7 +34,7 @@ def cmd_guard(a) -> int:
     fd = _lock(a)  # held until the process ends
     try:
         s = Session(a)
-        conns = _connectors(a, s.data)
+        conns = _connectors(a, s.data, s)
         data = s.data
         texts = {TEXT[c] for c in NOTICE_CODES}
         passes = 0

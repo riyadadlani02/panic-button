@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from panic import executor, google_personal
+from panic import executor, google_personal, microsoft_personal
 from panic.model import Account, Step
 from panic.session import RULE_CATEGORIES, YES, CliError, Session, _connectors, _redact, _unprotected, _upsert, _warn, _yes
 
@@ -43,8 +43,8 @@ def _print_snapshot(snap: dict) -> None:
             print(f"  - {i}")
 
 
-def _set_token(d: dict, email: str, token: dict) -> None:
-    d["credentials"].setdefault("google_personal", {})[email] = token
+def _set_token(d: dict, email: str, token: dict, provider: str = "google_personal") -> None:
+    d["credentials"].setdefault(provider, {})[email] = token
 
 
 def _pick_resetters(s: Session, acct_id: str) -> list[str]:
@@ -102,6 +102,63 @@ def _arm_personal(a) -> int:
         _upsert(d, account, snap)
         _set_token(d, email, token)
         d["credentials"].setdefault("google_client", config)  # lets --reconnect run without the file
+        d["edges"] += [[p, email] for p in picks if [p, email] not in d["edges"]]
+
+    s.update(change)
+    print(f"Armed {email}.")
+    return 0
+
+
+def _ms_sign_in(a, client_id: str, email: str) -> dict:
+    try:
+        token = a.ms_authorize(client_id, login_hint=email)
+    except Exception as e:
+        raise CliError(f"sign-in failed: {e}")
+    who = token.get("username") or ""
+    if who.casefold() != email.casefold():  # the sign-in lets the owner pick any account
+        raise CliError(f"signed in as {who or 'an unknown account'}, not {email}; nothing was stored.")
+    return token
+
+
+def _arm_microsoft_personal(a) -> int:
+    email, prov = a.microsoft_personal.lower(), "microsoft_personal"
+    if a.reconnect:
+        s = Session(a)
+        if not any(x.id == email and x.provider == prov for x in s.accounts):
+            raise CliError(f"{email} is not armed. Arm it first, without --reconnect.")
+        client_id = a.client_id or s.data["credentials"].get(prov, {}).get(email, {}).get("client_id")
+        if not client_id:
+            raise CliError("--client-id ID is required to sign in.")
+        token = _ms_sign_in(a, client_id, email)
+        s.update(lambda d: _set_token(d, email, token, prov))
+        print(f"Reconnected {email}.")
+        return 0
+    if not a.client_id:
+        raise CliError("--client-id ID is required to sign in.")
+    if not _yes(f"Do you hold a way to recover {email} that does not depend on {email} itself "
+                "(a Microsoft recovery code or a security key)?"):
+        _warn(f"Not armed: set up a recovery method for {email} that does not depend on it, then arm again.")
+        return 1
+    s = Session(a, create=True)
+    existing = next((x for x in s.accounts if x.id == email), None)
+    if existing and (existing.protected or existing.provider != prov):
+        raise CliError(f"{email} is already armed ({"protected, " if existing.protected else ""}{existing.provider}); refusing to replace it.")
+    token = _ms_sign_in(a, a.client_id, email)
+    account = Account(email, prov)
+    try:
+        conn = (a.connectors or {}).get(prov) or microsoft_personal.MicrosoftPersonal({email: token})
+        snap = conn.snapshot(account)
+    except Exception as e:
+        raise CliError(f"could not read {email}: {e}")
+    _print_snapshot(snap)
+    if not _yes(f"Is this what {email} should look like when it is safe? Approve it as the baseline?"):
+        print("Nothing saved.")
+        return 1
+    picks = _pick_resetters(s, email)
+
+    def change(d: dict) -> None:
+        _upsert(d, account, snap)
+        _set_token(d, email, token, prov)
         d["edges"] += [[p, email] for p in picks if [p, email] not in d["edges"]]
 
     s.update(change)
@@ -313,14 +370,16 @@ def cmd_arm(a) -> int:
         return _arm_github(a)
     if a.personal:
         return _arm_personal(a)
-    raise CliError("Give --personal EMAIL, --workspace, --microsoft-tenant TENANT, --github LOGIN or --guided KEY.")
+    if a.microsoft_personal:
+        return _arm_microsoft_personal(a)
+    raise CliError("Give --personal EMAIL, --microsoft-personal EMAIL, --workspace, --microsoft-tenant TENANT, --github LOGIN or --guided KEY.")
 
 
 # -- rehearse -----------------------------------------------------------
 
 def cmd_rehearse(a) -> int:
     s = Session(a)
-    conns, bad, approved = _connectors(a, s.data), False, {}
+    conns, bad, approved = _connectors(a, s.data, s), False, {}
     base = s.data["baselines"]
     for acct in s.accounts:
         conn = conns.get(acct.provider)

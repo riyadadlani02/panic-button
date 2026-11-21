@@ -157,13 +157,19 @@ def _upsert(d: dict, account: Account, snap: dict | None) -> None:
         d["baselines"][account.id] = snap
 
 
-def _connectors(a, data: dict) -> dict:
+def _connectors(a, data: dict, s: "Session | None" = None) -> dict:
     if a.connectors is not None:
         return a.connectors
     from panic.google_workspace import Workspace
     cred, out = data["credentials"], {}
     if "google_personal" in cred:
         out["google_personal"] = google_personal.Personal(cred["google_personal"])
+    if "microsoft_personal" in cred:
+        from panic.microsoft_personal import MicrosoftPersonal
+
+        def save(acct: str, token: dict) -> None:  # msal rotates refresh tokens; the vault must keep the new one
+            s.update(lambda d: d["credentials"]["microsoft_personal"].__setitem__(acct, token))
+        out["microsoft_personal"] = MicrosoftPersonal(cred["microsoft_personal"], on_refresh=s and save)
     if "google_workspace" in cred:
         w = cred["google_workspace"]
         out["google_workspace"] = Workspace(w["sa_info"], w["admin"], w["domain"])
@@ -185,7 +191,7 @@ def _reload(a, s: Session, conns: dict, last: dict) -> dict:
         fresh = vault.load(s.path, s.passphrase, s.key)
     except Exception:
         return last
-    new = _connectors(a, fresh)
+    new = _connectors(a, fresh, s)
     if new is not conns:
         conns.clear()
         conns.update(new)
