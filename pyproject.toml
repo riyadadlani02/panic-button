@@ -8,6 +8,7 @@ dependencies = [
     "google-api-python-client",
     "google-auth",
     "google-auth-oauthlib",
+    "msal>=1.39.0",
 ]
 
 [project.scripts]

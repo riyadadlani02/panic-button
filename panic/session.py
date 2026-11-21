@@ -167,6 +167,9 @@ def _connectors(a, data: dict) -> dict:
     if "google_workspace" in cred:
         w = cred["google_workspace"]
         out["google_workspace"] = Workspace(w["sa_info"], w["admin"], w["domain"])
+    if "microsoft_365" in cred:
+        from panic.microsoft_365 import Microsoft365
+        out["microsoft_365"] = Microsoft365(cred["microsoft_365"])
     if "github" in cred:
         from panic.github import GitHub
         out["github"] = GitHub(cred["github"])

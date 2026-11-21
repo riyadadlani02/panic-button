@@ -210,17 +210,18 @@ def cmd_release(a) -> int:
     conn = _connectors(a, s.data).get(acct.provider)
     if not hasattr(conn, "release"):
         raise CliError(f"{acct.provider} accounts cannot be released by this tool.")
-    if not _yes(f"Release {uid}? This unsuspends it and sets a temporary password."):
+    ms = acct.provider == "microsoft_365"
+    if not _yes(f"Release {uid}? This " + ("re-enables sign-in." if ms else "unsuspends it and sets a temporary password.")):
         print("Nothing changed.")
         return 1
     # Recorded first, so a running watch never re-suspends an account that was just released.
     s.update(lambda d: d.__setitem__("released", sorted({*d.get("released", []), uid})))
     try:
-        pw = conn.release(acct)
+        result = conn.release(acct)
     except Exception as e:
         s.update(lambda d: d.__setitem__("released", sorted(set(d.get("released", [])) - {uid})))
         raise CliError(f"could not release {uid}: {e}")
-    print(f"Released {uid}. Temporary password (shown once): {pw}")
+    print(f"Released {uid}. " + (result if ms else f"Temporary password (shown once): {result}"))
     return 0
 
 
@@ -261,12 +262,15 @@ def _parser() -> argparse.ArgumentParser:
     arm.add_argument("--reconnect", action="store_true", help="re-authorise an armed account only")
     arm.add_argument("--workspace", action="store_true")
     arm.add_argument("--sa-key", metavar="FILE", help="Workspace service-account key file")
-    arm.add_argument("--admin", metavar="EMAIL", help="protected break-glass admin")
+    arm.add_argument("--admin", metavar="EMAIL", help="protected break-glass admin (email or UPN)")
     arm.add_argument("--domain")
     arm.add_argument("--guided", metavar="KEY", help="a service with no API: its checklist of links")
     arm.add_argument("--id", metavar="LOGIN", help="your login at the guided service")
     arm.add_argument("--name", help="display name for a guided service")
     arm.add_argument("--link", action="append", default=[], metavar="KIND=URL", help="a guided link (repeatable)")
+    arm.add_argument("--microsoft-tenant", metavar="TENANT", help="arm a Microsoft 365 tenant")
+    arm.add_argument("--client-id", metavar="ID", help="Microsoft app registration (client) id")
+    arm.add_argument("--client-secret-file", metavar="FILE", help="file holding the app's client secret")
     arm.add_argument("--github", metavar="LOGIN", help="your GitHub login (with --org, the organisation admin's login)")
     arm.add_argument("--token-file", metavar="FILE", help="file holding the GitHub token")
     arm.add_argument("--org", metavar="NAME", help="arm this GitHub organisation instead of the account")

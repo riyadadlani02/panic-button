@@ -4,10 +4,10 @@ from pathlib import Path
 
 from panic import executor, google_personal
 from panic.model import Account, Step
-from panic.session import YES, CliError, Session, _connectors, _redact, _unprotected, _upsert, _warn, _yes
+from panic.session import RULE_CATEGORIES, YES, CliError, Session, _connectors, _redact, _unprotected, _upsert, _warn, _yes
 
 # Workspace rehearsal shows these as flags only; their contents are never printed.
-WORKSPACE_FLAGS = ("forwarding", "forwarding_addresses", "delegates", "recovery")
+WORKSPACE_FLAGS = ("forwarding", "forwarding_addresses", "delegates", "recovery", "consent_grants", "auth_methods")
 
 
 def _plan_lines(plan: list[Step]) -> list[str]:
@@ -118,11 +118,33 @@ def _arm_workspace(a) -> int:
     except (OSError, ValueError) as e:
         raise CliError(f"could not read the service-account key {a.sa_key}: {e}")
     admin = a.admin.lower()
+    return _arm_org(a, "google_workspace", "Workspace", admin, lambda: Workspace(sa_info, admin, a.domain),
+                    lambda ws: {"sa_info": sa_info, "admin": admin, "domain": a.domain})
+
+
+def _arm_microsoft(a) -> int:
+    if not (a.client_id and a.client_secret_file and a.admin):
+        raise CliError("--microsoft-tenant needs --client-id ID, --client-secret-file FILE and --admin UPN.")
+    from panic.microsoft_365 import Microsoft365
+    try:
+        secret = Path(a.client_secret_file).expanduser().read_text().strip()
+    except OSError as e:
+        raise CliError(f"could not read the client secret file {a.client_secret_file}: {e.strerror}")
+    if not secret or any(c.isspace() for c in secret):
+        raise CliError(f"{a.client_secret_file} should hold the client secret and nothing else.")
+    admin = a.admin.lower()
+    cred = {"tenant": a.microsoft_tenant, "client_id": a.client_id, "client_secret": secret, "admin": admin}
+    return _arm_org(a, "microsoft_365", "Microsoft 365", admin, lambda: Microsoft365(cred),
+                    lambda ms: {**cred, "domains": ms.domains()})
+
+
+def _arm_org(a, provider: str, label: str, admin: str, connect, credential) -> int:
+    """Arms every user of an organisation tenant and protects its admin; baselines are only ever added."""
     s = Session(a, create=True)
     prior = {x.id: x for x in s.accounts}
-    if admin in prior and prior[admin].provider != "google_workspace":
+    if admin in prior and prior[admin].provider != provider:
         raise CliError(f"{admin} is already armed as a {prior[admin].provider} account; refusing to replace it.")
-    ws = (a.connectors or {}).get("google_workspace") or Workspace(sa_info, admin, a.domain)
+    ws = (a.connectors or {}).get(provider) or connect()
     try:
         ws.verify_admin()
     except Exception as e:
@@ -130,17 +152,21 @@ def _arm_workspace(a) -> int:
     try:
         users = list(dict.fromkeys([u.lower() for u in ws.users()] + [admin]))
     except Exception as e:
-        raise CliError(f"could not list the Workspace users: {e}")
-    other = [u for u in users if u in prior and prior[u].provider != "google_workspace"]
+        raise CliError(f"could not list the {label} users: {e}")
+    try:
+        cred = credential(ws)
+    except Exception as e:
+        raise CliError(f"could not read the {label} settings: {e}")
+    other = [u for u in users if u in prior and prior[u].provider != provider]
     if other:
         _warn("Warning: already armed under another provider, skipped: " + ", ".join(other))
     users = [u for u in users if u not in other]
     failed: list[str] = []
     armed: list[tuple[Account, dict | None]] = []
     for u in users:
-        acct = prior.get(u) or Account(u, "google_workspace")
+        acct = prior.get(u) or Account(u, provider)
         if u == admin:  # the break-glass admin is always protected, whatever it was before
-            acct = Account(u, "google_workspace", protected=True)
+            acct = Account(u, provider, protected=True)
         snap = None
         # Re-arm never replaces a baseline: that would absorb whatever an attacker has added since.
         if not acct.protected and u not in s.data["baselines"]:  # the break-glass admin is never read either
@@ -158,7 +184,7 @@ def _arm_workspace(a) -> int:
                 r = item.removeprefix("email:").lower() if item.startswith("email:") else None
                 if r and r != u and r in users and [r, u] not in d["edges"]:
                     d["edges"].append([r, u])
-        d["credentials"]["google_workspace"] = {"sa_info": sa_info, "admin": admin, "domain": a.domain}
+        d["credentials"][provider] = cred
 
     s.update(change)
     if failed:
@@ -281,11 +307,13 @@ def cmd_arm(a) -> int:
         return _arm_guided(a)
     if a.workspace:
         return _arm_workspace(a)
+    if a.microsoft_tenant:
+        return _arm_microsoft(a)
     if a.github:
         return _arm_github(a)
     if a.personal:
         return _arm_personal(a)
-    raise CliError("Give --personal EMAIL, --workspace, --github LOGIN or --guided KEY.")
+    raise CliError("Give --personal EMAIL, --workspace, --microsoft-tenant TENANT, --github LOGIN or --guided KEY.")
 
 
 # -- rehearse -----------------------------------------------------------
@@ -308,9 +336,9 @@ def cmd_rehearse(a) -> int:
             bad = True
             continue
         out = executor.outside_baseline(base.get(acct.id, {}), snap)
-        if acct.provider == "google_workspace":
+        if acct.provider in ("google_workspace", "microsoft_365"):
             flags = sorted({o.split(":", 1)[0] for o in out} & set(WORKSPACE_FLAGS))
-            flags += [i for i in _redact({acct.id: out}, [acct])[acct.id] if i.startswith("filters:")]
+            flags += [i for i in _redact({acct.id: out}, [acct])[acct.id] if i.startswith(RULE_CATEGORIES)]
             print(f"{acct.id}: " + ("changed since baseline: " + ", ".join(flags) if flags else "no flagged changes"))
             if out and input(f"Accept {acct.id}'s current settings as the new baseline? [y/N] ").strip().lower() in YES:
                 approved[acct.id] = snap
