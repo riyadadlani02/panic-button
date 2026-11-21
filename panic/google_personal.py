@@ -8,7 +8,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 import json
 
 from panic import gmail_settings as gs
-from panic.model import Account, Phase, Snapshot, Step, Tier, WatchPolicy
+from panic.model import Account, Finding, Phase, Snapshot, Step, Tier, WatchPolicy
+from panic.signals import drift, gmail_rule_code
 
 # Settings only: this scope cannot read mail content.
 SCOPES = ["https://www.googleapis.com/auth/gmail.settings.basic"]
@@ -82,6 +83,14 @@ class Personal:
         svc = self._svc(account.id)
         return {"filters": gs.filters(svc), "forwarding": gs.forwarding(svc),
                 "forwarding_addresses": gs.forwarding_addresses(svc), "imap_pop": gs.imap_pop(svc, imap=False)}
+
+    def signals(self, account: Account, snapshot: Snapshot, baseline: Snapshot) -> list[Finding]:
+        def classify(cat: str, item: str) -> str | None:
+            if cat == "filters":
+                return gmail_rule_code(item, None)
+            return {"forwarding": "forwarding_added", "forwarding_addresses": "forwarding_added",
+                    "imap_pop": "pop_enabled"}.get(cat)
+        return drift(account.id, baseline, snapshot, classify)
 
     @staticmethod
     def _known(step: Step, baseline: Snapshot, category: str) -> list[str]:

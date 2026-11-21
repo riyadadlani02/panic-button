@@ -14,18 +14,23 @@
 import secrets
 import threading
 import time
+from datetime import datetime, timezone
 
 import googleapiclient.discovery
 from google.oauth2 import service_account
 from googleapiclient.errors import HttpError
 
 from panic import gmail_settings as gs
-from panic.model import Account, Phase, Snapshot, Step, Tier, WatchPolicy
+from panic.model import Account, Finding, Phase, Severity, Snapshot, Step, Tier, WatchPolicy
+from panic.signals import TEXT, drift, gmail_rule_code
 
 _AUTH = "https://www.googleapis.com/auth/"
 # Settings and directory only: none of these can read mail content.
 SCOPES = [_AUTH + s for s in ("admin.directory.user", "admin.directory.user.security",
-                              "gmail.settings.basic", "gmail.settings.sharing")]
+                              "gmail.settings.basic", "gmail.settings.sharing",
+                              "admin.reports.audit.readonly")]
+SUSPICIOUS = {"suspicious_login", "suspicious_login_less_secure_app", "suspicious_programmatic_login",
+              "account_disabled_hijacked"}
 
 F, P = Phase.FREEZE, Phase.PURGE
 R, REP, N = WatchPolicy.REAPPLY, WatchPolicy.REPORT, WatchPolicy.NONE
@@ -60,7 +65,7 @@ class Workspace:
         cache = self._local.__dict__.setdefault("svcs", {})
         if (api, subject) not in cache:
             creds = service_account.Credentials.from_service_account_info(self._sa, scopes=SCOPES, subject=subject)
-            name, version = ("admin", "directory_v1") if api == "admin" else ("gmail", "v1")
+            name, version = {"admin": ("admin", "directory_v1"), "reports": ("admin", "reports_v1")}.get(api, ("gmail", "v1"))
             cache[(api, subject)] = self._build(name, version, credentials=creds, cache_discovery=False)
         return cache[(api, subject)]
 
@@ -128,6 +133,34 @@ class Workspace:
         return {"forwarding": gs.forwarding(g), "forwarding_addresses": self._fwd_addrs(a),
                 "delegates": self._delegates(a), "filters": gs.filters(g), "imap_pop": gs.imap_pop(g),
                 "recovery": self._recovery(a), "apps": self._tokens(a), "app_passwords": self._asps(a)}
+
+    def signals(self, account: Account, snapshot: Snapshot, baseline: Snapshot) -> list[Finding]:
+        self._refuse_admin(account.id)
+
+        def classify(cat: str, item: str) -> str | None:
+            if cat == "filters":
+                return gmail_rule_code(item, self.domain)
+            if cat in ("forwarding", "forwarding_addresses"):  # forwarding items read "on -> address"
+                return "forwarding_added" if self._outside_domain(item.rpartition("-> ")[2]) else None
+            return {"delegates": "delegate_added", "recovery": "recovery_changed"}.get(cat) or (
+                "pop_enabled" if cat == "imap_pop" and item == "pop" else None)
+        return drift(account.id, baseline, snapshot, classify)
+
+    def events(self, account: Account, since: datetime) -> list[Finding]:
+        self._refuse_admin(account.id)
+        kw = {"userKey": account.id, "applicationName": "login",
+              "startTime": since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        out = []
+        while True:
+            r = self._call(self._svc("reports", self.admin).activities().list(**kw)) or {}
+            for act in r.get("items", []):
+                for e in act.get("events", []):
+                    if e.get("name") in SUSPICIOUS:
+                        out.append(Finding(account.id, "provider_flagged_login", Severity.TRIGGER,
+                                           TEXT["provider_flagged_login"], (e["name"],)))
+            if not r.get("nextPageToken"):
+                return out
+            kw["pageToken"] = r["nextPageToken"]
 
     # -- writes --------------------------------------------------------
     @staticmethod

@@ -69,7 +69,7 @@ The OAuth client is kept in the vault from the first arm, so `--client-secrets` 
 ## Setup: Google Workspace
 
 1. Create a service account, enable domain-wide delegation for it, and download its JSON key.
-2. In the Admin console authorise the service account's client ID for exactly these four scopes: Admin SDK directory user security, Admin SDK directory user (read/write), Gmail settings basic, and Gmail settings sharing. The exact scope URLs are listed in `panic/google_workspace.py`.
+2. In the Admin console authorise the service account's client ID for exactly these five scopes: Admin SDK directory user security, Admin SDK directory user (read/write), Gmail settings basic, Gmail settings sharing, and Admin SDK reports audit (read-only, used to read sign-in alerts). The exact scope URLs are listed in `panic/google_workspace.py`.
 3. Use a dedicated break-glass admin account. It is the identity the tool acts as and is never a target, even with `--all`.
 
 ```

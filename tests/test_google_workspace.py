@@ -184,7 +184,7 @@ def test_users_pages_through_the_tenant(conn, directory):
 
 def test_scopes_cannot_read_mail():
     assert not any(s.endswith(("gmail.readonly", "gmail.modify", "mail.google.com/")) for s in google_workspace.SCOPES)
-    assert len(google_workspace.SCOPES) == 4
+    assert len(google_workspace.SCOPES) == 5
 
 
 def test_admin_guard_ignores_case(conn, directory, gmail):
@@ -227,3 +227,53 @@ def test_verify_admin_needs_the_primary_address_of_a_super_admin(conn, directory
 def test_only_forwarding_off_waits_for_the_first_read(sa_info):
     ws = Workspace(sa_info, ADMIN, "corp.test", build=lambda *a, **k: MagicMock())
     assert [s.action for s in ws.catalog(ACCT) if s.after_read] == ["forwarding_off"]
+
+
+BASE = {"forwarding": [], "forwarding_addresses": [], "delegates": [], "filters": [], "imap_pop": [],
+        "recovery": [], "apps": [], "app_passwords": []}
+
+
+def codes(conn, **changed):
+    return {f.code for f in conn.signals(ACCT, {**BASE, **changed}, BASE) if f.severity.name == "TRIGGER"}
+
+
+def test_signals_forwarding_own_domain_is_quiet_outside_is_not(conn):
+    assert codes(conn, forwarding_addresses=["x@corp.test"]) == set()
+    assert codes(conn, forwarding_addresses=["x@evil.test"]) == {"forwarding_added"}
+    assert codes(conn, forwarding=["on -> x@evil.test"]) == {"forwarding_added"}
+    assert codes(conn, forwarding=["on -> x@corp.test"]) == set()
+
+
+def test_signals_filter_delegate_recovery_pop(conn):
+    fwd = lambda a: json.dumps({"action": {"forward": a}})
+    assert codes(conn, filters=[fwd("x@evil.test")]) == {"rule_forwards_outside"}
+    assert codes(conn, filters=[fwd("x@corp.test")]) == set()
+    assert codes(conn, delegates=["p@corp.test"]) == {"delegate_added"}
+    assert codes(conn, recovery=["phone:1"]) == {"recovery_changed"}
+    assert codes(conn, imap_pop=["pop"]) == {"pop_enabled"}
+    assert codes(conn, imap_pop=["imap"]) == set()
+    assert codes(conn, apps=["client"]) == set()
+
+
+def test_events_flag_only_suspicious_logins(conn, directory):
+    from datetime import datetime, timezone
+    acts = directory.activities().list
+    acts().execute.return_value = {"items": [
+        {"events": [{"name": "login_success"}]}, {"events": [{"name": "suspicious_login"}]}]}
+    out = conn.events(ACCT, datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc))
+    assert [(f.code, f.items, f.severity.name) for f in out] == [
+        ("provider_flagged_login", ("suspicious_login",), "TRIGGER")]
+    acts.assert_called_with(userKey="a@corp.test", applicationName="login", startTime="2026-01-02T03:04:05Z")
+
+
+def test_signals_and_events_refuse_the_admin(conn):
+    from datetime import datetime, timezone
+    admin = Account(ADMIN, "google_workspace")
+    with pytest.raises(ValueError, match="refusing to act"):
+        conn.signals(admin, BASE, BASE)
+    with pytest.raises(ValueError, match="refusing to act"):
+        conn.events(admin, datetime.now(timezone.utc))
+
+
+def test_reports_scope_is_requested():
+    assert google_workspace.SCOPES[-1].endswith("admin.reports.audit.readonly")

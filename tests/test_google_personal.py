@@ -169,3 +169,25 @@ def test_authorize_uses_the_client_config_and_login_hint(monkeypatch):
 def test_only_imap_pop_waits_for_the_first_read():
     conn, _ = make()
     assert [s.action for s in conn.catalog(ACCT) if s.after_read] == ["imap_pop"]
+
+
+def test_signals_flag_hiding_rule_and_pop():
+    conn, _ = make()
+    base = {"filters": [], "forwarding": [], "forwarding_addresses": [], "imap_pop": []}
+    snap = {**base, "filters": [json.dumps({"action": {"addLabelIds": ["TRASH"]}})], "imap_pop": ["pop"]}
+    assert {f.code for f in conn.signals(ACCT, snap, base)} == {"rule_hides_mail", "pop_enabled"}
+
+
+def test_signals_label_only_filter_is_just_a_notice_and_new_forwarding_triggers():
+    conn, _ = make()
+    base = {"filters": [], "forwarding": [], "forwarding_addresses": [], "imap_pop": []}
+    snap = {**base, "filters": [CANON_F1]}
+    assert [f.code for f in conn.signals(ACCT, snap, base)] == ["changed"]
+    snap = {**base, "forwarding_addresses": ["x@evil.test"]}
+    assert [f.code for f in conn.signals(ACCT, snap, base)] == ["forwarding_added"]
+
+
+def test_signals_missing_baseline_category_fails_closed():
+    conn, _ = make()
+    with pytest.raises(KeyError, match="no baseline recorded for filters"):
+        conn.signals(ACCT, {"filters": []}, {})
