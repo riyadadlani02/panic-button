@@ -404,8 +404,8 @@ def cmd_arm(a) -> int:
 
 def cmd_rehearse(a) -> int:
     s = Session(a)
-    conns, bad, approved = _connectors(a, s.data, s), False, {}
-    base = s.data["baselines"]
+    conns, bad, approved, resumed = _connectors(a, s.data, s), False, {}, set()
+    base, unguarded = s.data["baselines"], set(s.data.get("unguarded", []))
     for acct in s.accounts:
         conn = conns.get(acct.provider)
         if acct.protected or conn is None:
@@ -433,11 +433,13 @@ def cmd_rehearse(a) -> int:
             print("\n".join(f"  - {o}" for o in out))
             if _yes(f"Approve this as the new baseline for {acct.id}?"):
                 approved[acct.id] = snap
+        if acct.id in unguarded and _yes(f"Resume guarding {acct.id}?"):
+            resumed.add(acct.id)
     print("Plan:")
     print("\n".join(_plan_lines(executor.compile_plan(s.accounts, s.edges, conns))) or "  (no steps)")
-    if approved:  # an unchanged rehearsal must not reset saved_at on an exported copy
+    if approved or resumed:  # an unchanged rehearsal must not reset saved_at on an exported copy
         def change(d: dict) -> None:
             d["baselines"].update(approved)
-            d["released"] = [r for r in d.get("released", []) if r not in approved]  # enforcement resumes
+            d["unguarded"] = [u for u in d.get("unguarded", []) if u not in resumed]
         s.update(change)
     return 1 if bad else 0

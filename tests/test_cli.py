@@ -11,7 +11,7 @@ from fake import FakeConnector
 
 from panic import executor, log, vault
 from panic.cli import main, outcome_from_json, outcome_to_json
-from panic.model import Evidence, Finding, Outcome, Severity, Phase, Result, Status, Step, Tier, WatchPolicy
+from panic.model import Account, Evidence, Finding, Outcome, Severity, Phase, Result, Status, Step, Tier, WatchPolicy
 
 PW = "pw"
 CLIENT = {"installed": {"client_id": "i"}}
@@ -753,7 +753,7 @@ def test_release_records_the_id_before_unsuspending(armed, capsys):
 def test_failed_release_is_taken_back_out_of_released(armed, capsys):
     fake.release = lambda a: (_ for _ in ()).throw(RuntimeError("api down"))
     assert cli("release", "--user", "mail", answers=["y"]) == 1
-    assert open_vault()["released"] == [] and "api down" in capsys.readouterr().err
+    assert open_vault()["released"] == open_vault()["unguarded"] == [] and "api down" in capsys.readouterr().err
 
 
 def test_guard_names_an_exception_without_a_message(capsys):
@@ -934,9 +934,19 @@ def test_alert_mode_notifies_and_saves_state_but_never_presses(guard):
 
 
 def test_contain_runs_only_reapply_steps(guard):
+    fake.steps += [Step("", a, Phase.FREEZE, Tier.API, a, watch=WatchPolicy.REAPPLY)
+                   for a in ("suspend", "disable", "deactivate", "delegates")]
     trigger("mail")
     guard.run("--on-detect", "contain", "--passes", "1")
     assert sorted(fake.ran) == ["bank/rules", "mail/rules"]
+
+
+def test_contain_with_nothing_to_contain_writes_nothing(guard, capsys):
+    fake.steps = [Step("", "suspend", Phase.FREEZE, Tier.API, "Suspend", watch=WatchPolicy.REAPPLY)]
+    trigger("mail")
+    guard.run("--on-detect", "contain", "--passes", "1")
+    assert fake.ran == [] and "outcomes" not in open_vault() and reports() == []
+    assert "nothing to contain" in capsys.readouterr().out
 
 
 def test_dry_run_changes_nothing(guard):
@@ -1000,13 +1010,71 @@ def test_a_failed_automatic_press_does_not_kill_the_guard(guard, monkeypatch, ca
     assert "pressed" in open_vault()["guard"] and open_vault()["guard"]["pressed"]["mail"]
 
 
-def test_rehearse_approval_removes_the_account_from_released(armed):
-    d = open_vault()
-    d["released"] = ["mail"]
-    vault.save(vpath, d, PW, kpath.read_bytes())
+def test_release_leaves_the_account_unguarded_until_rehearse_resumes_it(armed):
+    fake.release = lambda a: "pw"
+    cli("release", "--user", "mail", answers=["y"])
+    assert open_vault()["unguarded"] == ["mail"]
     fake.snap = {"filters": ["x"]}
-    cli("rehearse", answers=["y", "n"])
-    assert open_vault()["released"] == []
+    cli("rehearse", answers=["y", "n", "n"])  # approve mail, decline resuming it, decline bank
+    assert open_vault()["unguarded"] == ["mail"] and open_vault()["released"] == ["mail"]
+    fake.snap = {}
+    cli("rehearse", answers=["y"])  # mail now matches its baseline and is still offered
+    assert open_vault()["unguarded"] == [] and open_vault()["released"] == ["mail"]
+
+
+def test_released_then_resumed_is_not_relocked_until_a_new_guard_press(guard):
+    fake.steps.append(Step("", "suspend", Phase.FREEZE, Tier.API, "Suspend", watch=WatchPolicy.REAPPLY))
+    fake.release = lambda a: fake.state.__setitem__("mail/suspend", False) or "pw"
+    trigger("mail")
+    guard.run("--passes", "1")
+    assert fake.state["mail/suspend"] is True
+    cli("release", "--user", "mail", answers=["y"])
+    fake.signals = lambda acct, snap, base: []
+    cli("rehearse", answers=["y"])
+    fake.ran.clear()
+    guard.run("--passes", "1")  # inside the window: the watch leaves the released lock alone
+    assert "mail/suspend" not in fake.ran and fake.state["mail/suspend"] is False
+    d = open_vault()
+    d["guard"]["pressed"] = {k: v - 25 * 3600 for k, v in d["guard"]["pressed"].items()}
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    trigger("mail")
+    guard.run("--passes", "1")  # a new automatic press clears released
+    assert "mail" not in open_vault()["released"] and fake.state["mail/suspend"] is True
+    fake.state["mail/suspend"] = False
+    fake.signals = lambda acct, snap, base: []
+    guard.run("--passes", "1")
+    assert fake.state["mail/suspend"] is True  # and the watch holds the new lock
+
+
+def _lock_step(provider):
+    from panic.google_workspace import Workspace
+    from panic.microsoft_365 import Microsoft365
+    from panic.slack import Slack
+    conn = {"google_workspace": lambda: Workspace({}, "admin@d.com", "d.com"),
+            "microsoft_365": lambda: Microsoft365({"admin": "admin@d.com"}, api=object(), token=lambda: ""),
+            "slack": lambda: Slack({"token": "t", "plan": "business"}, object(), object(), object())}[provider]()
+    acct = Account("a", provider)
+    return next(s for s in conn.catalog(acct) if s.tier is Tier.API and s.phase is Phase.FREEZE
+                and s.watch is WatchPolicy.REAPPLY)
+
+
+@pytest.mark.parametrize("provider", ["google_workspace", "microsoft_365", "slack"])
+def test_release_then_watch_never_relocks(armed, patch_watch, provider):
+    lock = replace(_lock_step(provider), account="")
+    org = FakeConnector(provider=provider, steps=[lock])
+    org.release = lambda acct: org.state.__setitem__(f"{acct.id}/{lock.action}", False) or "pw"
+    d = open_vault()
+    d["accounts"].append({"id": "staff", "provider": provider, "protected": False})
+    d["baselines"]["staff"] = {}
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    conns = {provider: org}
+    assert cli("press", "--user", "staff", connectors=conns) == 0
+    assert cli("release", "--user", "staff", answers=["y"], connectors=conns) == 0
+    d = open_vault()
+    results = [r for o in d["outcomes"] for r in outcome_from_json(o).results]
+    accounts = [Account(**x) for x in d["accounts"]]
+    assert executor.watch_once(results, conns, accounts, d["baselines"], set(d["released"]), lambda e: None) == []
+    assert org.ran == [f"staff/{lock.action}"]
 
 
 def test_a_failed_pass_is_reported_and_the_guard_carries_on(guard, monkeypatch, capsys):

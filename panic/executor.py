@@ -7,6 +7,9 @@ from typing import Protocol
 from panic.graph import lock_order, resetters
 from panic.model import Account, Edges, Evidence, Outcome, Phase, Result, Snapshot, Status, Step, Tier, WatchPolicy
 
+# Steps that lock the person out; `panic release` lifts them on purpose, so the watch never puts them back.
+LOCK_ACTIONS = {"suspend", "disable", "deactivate"}
+
 
 class Connector(Protocol):
     # run and check are called concurrently from several threads and must be thread-safe.
@@ -235,7 +238,7 @@ def watch_once(results: list[Result], connectors: dict[str, Connector], accounts
             continue
         if provider.get(step.account) not in connectors:
             continue
-        if step.action == "suspend" and step.account in released:  # the owner lifted it on purpose
+        if step.action in LOCK_ACTIONS and step.account in released:
             continue
         conn, base = connectors[provider[step.account]], baselines.get(step.account, {})
         name = f"{step.account}/{step.action}"

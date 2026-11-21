@@ -14,6 +14,8 @@ from panic.session import (ORG_PROVIDERS, CliError, Session, _connectors, _outco
 from panic.signals import TEXT
 
 MIN_INTERVAL_S = 30
+# Contain never locks anyone out, and Workspace's delegates step removes every delegate, baselined or not.
+CONTAIN_SKIP = executor.LOCK_ACTIONS | {"delegates"}
 NOTICE_CODES = {"changed", "unreadable", "events_unreadable"}
 
 
@@ -74,7 +76,13 @@ def cmd_guard(a) -> int:
                     try:
                         plan = executor.compile_plan([x for x in accounts if x.id in targets], edges, conns)
                         if a.on_detect == "contain":
-                            plan = [st for st in plan if st.tier is Tier.API and st.watch is WatchPolicy.REAPPLY]
+                            plan = [st for st in plan if st.tier is Tier.API and st.watch is WatchPolicy.REAPPLY
+                                    and st.action not in CONTAIN_SKIP]
+                            if not plan:
+                                print(f"Guard: nothing to contain for {', '.join(targets)}.")
+                                return
+                        else:  # a new press puts lock enforcement back
+                            s.update(lambda d: d.__setitem__("released", sorted(set(d.get("released", [])) - set(targets))))
                         out = executor.press(plan, accounts, edges, conns, data["baselines"], lambda step: False, s.log,
                                              progress=_warn, checkpoint=checkpoint)
                         out.triggers = [f"{f.code}: {shown(f)}" for f in findings]
@@ -87,7 +95,7 @@ def cmd_guard(a) -> int:
                         print(f"Guard: {msg}")
 
                 per_acct = {x.id: conns[x.provider] for x in accounts if x.provider in conns}
-                for line in guard_once(accounts, edges, per_acct, data["baselines"], set(data.get("released", [])),
+                for line in guard_once(accounts, edges, per_acct, data["baselines"], set(data.get("unguarded", [])),
                                        state, a.on_detect, act, notifier, save, dry_run=a.dry_run):
                     notified = line.removeprefix("would ").removeprefix("notify ")
                     acct, _, text = notified.partition(": ")
@@ -97,7 +105,7 @@ def cmd_guard(a) -> int:
                     if state != before:  # guard_once only saves before acting; notices and cursors need it too
                         save()
                     for line in executor.watch_once(_recent_results(_outcomes(s), time.time()), conns, accounts,
-                                                    data["baselines"], set(data.get("released", [])), s.log):
+                                                    data["baselines"], set(s.data.get("released", [])), s.log):
                         print(line)
             except Exception as e:  # unattended: a failed pass must not end the protection
                 msg = f"a guard pass failed ({type(e).__name__}: {e}); the guard is still running."

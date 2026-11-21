@@ -214,12 +214,16 @@ def cmd_release(a) -> int:
     if not _yes(f"Release {uid}? This " + (note or "unsuspends it and sets a temporary password.")):
         print("Nothing changed.")
         return 1
-    # Recorded first, so a running watch never re-suspends an account that was just released.
-    s.update(lambda d: d.__setitem__("released", sorted({*d.get("released", []), uid})))
+    def mark(d: dict, on: bool) -> None:
+        for k in ("released", "unguarded"):
+            d[k] = sorted({*d.get(k, []), uid} if on else set(d.get(k, [])) - {uid})
+
+    # Recorded first, so a running watch never re-locks and a running guard never presses an account just released.
+    s.update(lambda d: mark(d, True))
     try:
         result = conn.release(acct)
     except Exception as e:
-        s.update(lambda d: d.__setitem__("released", sorted(set(d.get("released", [])) - {uid})))
+        s.update(lambda d: mark(d, False))
         raise CliError(f"could not release {uid}: {e}")
     print(f"Released {uid}. " + (result if note else f"Temporary password (shown once): {result}"))
     return 0
