@@ -47,6 +47,20 @@ def _set_token(d: dict, email: str, token: dict) -> None:
     d["credentials"].setdefault("google_personal", {})[email] = token
 
 
+def _pick_resetters(s: Session, acct_id: str) -> list[str]:
+    armed = [x for x in _unprotected(s) if x != acct_id]
+    picks: list[str] = []
+    while armed:
+        raw = input(f"Which of your armed accounts can reset this one? ({', '.join(armed)}; "
+                    "comma-separated, empty for none) ")
+        picks = [p.strip().lower() for p in raw.split(",") if p.strip()]
+        unknown = [p for p in picks if p not in armed]
+        if not unknown:
+            break
+        print("Not armed accounts: " + ", ".join(unknown))
+    return picks
+
+
 def _arm_personal(a) -> int:
     email = a.personal.lower()
     if a.reconnect:
@@ -82,16 +96,7 @@ def _arm_personal(a) -> int:
     if not _yes(f"Is this what {email} should look like when it is safe? Approve it as the baseline?"):
         print("Nothing saved.")
         return 1
-    armed = [x for x in _unprotected(s) if x != email]
-    picks: list[str] = []
-    while armed:
-        raw = input(f"Which of your armed accounts can reset this one? ({', '.join(armed)}; "
-                    "comma-separated, empty for none) ")
-        picks = [p.strip().lower() for p in raw.split(",") if p.strip()]
-        unknown = [p for p in picks if p not in armed]
-        if not unknown:
-            break
-        print("Not armed accounts: " + ", ".join(unknown))
+    picks = _pick_resetters(s, email)
 
     def change(d: dict) -> None:
         _upsert(d, account, snap)
@@ -198,16 +203,7 @@ def _arm_guided(a) -> int:
                 "(printed backup codes or a security key)?"):
         _warn(f"Not armed: set up a recovery method for {acct_id} that does not depend on it, then arm again.")
         return 1
-    armed = [x for x in _unprotected(s) if x != acct_id]
-    picks: list[str] = []
-    while armed:
-        raw = input(f"Which of your armed accounts can reset this one? ({', '.join(armed)}; "
-                    "comma-separated, empty for none) ")
-        picks = [p.strip().lower() for p in raw.split(",") if p.strip()]
-        unknown = [p for p in picks if p not in armed]
-        if not unknown:
-            break
-        print("Not armed accounts: " + ", ".join(unknown))
+    picks = _pick_resetters(s, acct_id)
 
     def change(d: dict) -> None:
         _upsert(d, Account(acct_id, "guided"), None)  # nothing readable, so no baseline
@@ -221,14 +217,75 @@ def _arm_guided(a) -> int:
     return 0
 
 
+def _arm_github(a) -> int:
+    from panic.github import GitHub
+    if not a.token_file:
+        raise CliError("--github needs --token-file FILE.")
+    try:
+        token = Path(a.token_file).expanduser().read_text().strip()
+    except OSError as e:
+        raise CliError(f"could not read the token file {a.token_file}: {e.strerror}")
+    if not token or any(c.isspace() for c in token):
+        raise CliError(f"{a.token_file} should hold the token and nothing else.")
+    login = a.github.lower()
+    acct_id = f"org:{a.org.lower()}" if a.org else login
+    account = Account(acct_id, "github")
+    reconnect = bool(a.reconnect)
+    if not reconnect and not _yes(f"Do you hold a way to recover {login} that does not depend on {login} itself "
+                                  "(printed recovery codes or a security key)?"):
+        _warn(f"Not armed: set up a recovery method for {login} that does not depend on it, then arm again.")
+        return 1
+    s = Session(a) if reconnect else Session(a, create=True)
+    existing = next((x for x in s.accounts if x.id == acct_id), None)
+    if reconnect and not (existing and existing.provider == "github"):
+        raise CliError(f"{acct_id} is not armed. Arm it first, without --reconnect.")
+    if existing and (existing.protected or existing.provider != "github"):
+        raise CliError(f"{acct_id} is already armed ({'protected, ' if existing.protected else ''}{existing.provider}); refusing to replace it.")
+    conn = (a.connectors or {}).get("github") or GitHub({acct_id: token})
+    try:
+        who = conn.login(acct_id)
+        if who.casefold() != login.casefold():
+            raise CliError(f"the token belongs to {who}, not {login}; nothing was stored.")
+        if a.org and not conn.is_org_admin(account):
+            raise CliError(f"{who} is not an active admin of {a.org}; nothing was stored.")
+    except CliError:
+        raise
+    except Exception as e:
+        raise CliError(f"could not check the token: {e}")
+    if reconnect:
+        s.update(lambda d: d["credentials"].setdefault("github", {}).__setitem__(acct_id, token))
+        print(f"Reconnected {acct_id}.")
+        return 0
+    try:
+        snap = conn.snapshot(account)
+    except Exception as e:
+        raise CliError(f"could not read {acct_id}: {e}")
+    _print_snapshot(snap)
+    if not _yes(f"Is this what {acct_id} should look like when it is safe? Approve it as the baseline?"):
+        print("Nothing saved.")
+        return 1
+    picks = _pick_resetters(s, acct_id)
+
+    def change(d: dict) -> None:
+        _upsert(d, account, snap)
+        d["credentials"].setdefault("github", {})[acct_id] = token
+        d["edges"] += [[p, acct_id] for p in picks if [p, acct_id] not in d["edges"]]
+
+    s.update(change)
+    print(f"Armed {acct_id}.")
+    return 0
+
+
 def cmd_arm(a) -> int:
     if a.guided:
         return _arm_guided(a)
     if a.workspace:
         return _arm_workspace(a)
+    if a.github:
+        return _arm_github(a)
     if a.personal:
         return _arm_personal(a)
-    raise CliError("Give --personal EMAIL or --workspace.")
+    raise CliError("Give --personal EMAIL, --workspace, --github LOGIN or --guided KEY.")
 
 
 # -- rehearse -----------------------------------------------------------
