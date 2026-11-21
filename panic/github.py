@@ -1,4 +1,4 @@
-"""Connector for a GitHub user account or organisation, over the REST API with a fine-grained token."""
+"""Connector for a GitHub user account or organisation, over the REST API with a classic personal access token."""
 import hashlib
 import json
 import threading

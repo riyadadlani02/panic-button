@@ -12,6 +12,7 @@ from pathlib import Path
 from panic import executor, log, session, vault
 from panic.cli import main
 from panic.model import Phase, Step, Tier, WatchPolicy
+from panic.signals import drift
 
 MAIL, BANK, SOCIAL, ADMIN, OLD = "mail@demo.test", "bank@demo.test", "social@demo.test", "admin@demo.test", "old@elsewhere.test"
 
@@ -44,6 +45,10 @@ class SimProvider:
     def snapshot(self, account):
         s = self._acct(account.id)
         return {k: list(s[k]) for k in ("forwarding", "filters", "apps")}
+
+    def signals(self, account, snapshot, baseline):
+        # New forwarding is the one thing this provider treats as a takeover; other changes are notices.
+        return drift(account.id, baseline, snapshot, lambda cat, item: "forwarding_added" if cat == "forwarding" else None)
 
     def run(self, step, baseline):
         s = self._acct(step.account)
@@ -81,9 +86,9 @@ def demo():
     builtins.input = answer
     session._same_device = lambda a, b: False  # the demo keeps vault and key in one temp folder
 
-    def panic(*args):
+    def panic(*args, **kw):
         print(f"\n$ panic {' '.join(args)}")
-        return main(["--vault", str(vpath), "--keyfile", str(kpath), *args], connectors={"sim": sim})
+        return main(["--vault", str(vpath), "--keyfile", str(kpath), *args], connectors={"sim": sim}, **kw)
 
     say("1. Arm: record each account's known-good settings (written straight to the vault; `panic arm` itself is Google-only)")
     key = vault.new_keyfile()
@@ -133,13 +138,30 @@ def demo():
     print("\nNote the \"Put back during the watch\" section: the re-added forwarding, and when the watch removed it.")
     panic("removed", "--user", MAIL)
 
-    say("6. Evidence")
+    say("6. The guard: the attacker returns while `panic guard` is running, and it presses by itself")
+    sim.down.clear()  # the unreachable provider is back
+    pressed_before = len(vault.load(vpath, "demo passphrase", key)["outcomes"])
+
+    def attacker_between_passes(_seconds):  # stands in for the 30 s pause between guard passes
+        sim.state[MAIL]["forwarding"].append("thief3@evil.test")
+        print("\n[attacker adds forwarding to thief3@evil.test while the guard sleeps]")
+
+    rc = panic("guard", "--passes", "2", "--interval", "30", sleep=attacker_between_passes,
+               notifier=lambda title, text: print(f"[notification] {title}: {text}"))
+    print("\nState after the guard:", sim.state[MAIL])
+    outcomes = vault.load(vpath, "demo passphrase", key)["outcomes"]
+    assert rc == 0 and len(outcomes) == pressed_before + 1, "the guard did not press"
+    assert outcomes[-1]["triggers"][0].startswith("forwarding_added: "), outcomes[-1]["triggers"]
+    assert sim.state[MAIL]["forwarding"] == [], "the guard pressed but the forwarding is still there"
+
+    say("7. Evidence")
     log_path = Path(f"{vpath}.log.jsonl")
     print(f"Audit log entries: {len(log_path.read_text().splitlines())}, chain intact: {log.verify(log_path)}")
     print("Files:", ", ".join(sorted(p.name for p in tmp.iterdir())))
     assert sim.state[MAIL]["forwarding"] == [] and sim.state[MAIL]["filters"] == ["label: newsletters"]
     assert sim.state[MAIL]["apps"] == [] and sim.state[MAIL]["sessions"] == 0
-    print("Checked: the root mailbox is back to its baseline, and the re-added forwarding was removed.")
+    print("Checked: the root mailbox is back to its baseline, the re-added forwarding was removed, "
+          "and the guard pressed by itself when forwarding appeared.")
 
 
 if __name__ == "__main__":

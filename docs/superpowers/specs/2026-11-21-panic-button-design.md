@@ -174,7 +174,7 @@ Google, first provider, both modes:
 ## Milestones
 
 1. **Engine, vault, Google in both modes.** Map, baseline, plan, executor with Freeze/Purge/Verify/Watch, dry-run, report, log, rehearsal. Workspace connector by API; personal Gmail by API plus guided steps. Done means: on a test Workspace user, a press suspends, signs out, revokes app access and strips forwarding, each recorded at its true evidence level; dry-run changes nothing; the report is produced; unit tests run against a fake connector.
-2. Microsoft 365 and GitHub connectors; hardware security key.
+2. Self-detection (`panic guard`) and more services: Microsoft 365, personal Microsoft, GitHub, Slack and guided services. See `2026-11-21-panic-button-milestone-2-design.md`; the hardware security key moves to milestone 3.
 3. Script tier for personal accounts.
 4. App UI, phone trigger for orgs.
 
