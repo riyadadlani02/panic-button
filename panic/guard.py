@@ -18,6 +18,10 @@ def _notice(account: str, code: str) -> Finding:
     return Finding(account, code, Severity.NOTICE, TEXT[code])
 
 
+def _key(f: Finding) -> str:
+    return f"{f.account}|{f.code}|{'|'.join(f.items)}"
+
+
 def _read(conn, account: Account, baseline: Snapshot | None) -> list[Finding]:
     snap = conn.snapshot(account)
     if baseline is None:
@@ -73,19 +77,31 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
             _handle_notice(f, state, dry_run, report)
 
         if triggers:
-            try:  # a failed re-read keeps the triggers: never read a failure as "nothing there"
+            try:
                 again = {f.code for f in _read(conn, acct, baselines.get(acct.id)) if f.severity == Severity.TRIGGER}
                 triggers = [f for f in triggers if f.code in again]
-            except Exception:
-                pass
+            except Exception:  # a failed re-read confirms nothing; the next pass re-evaluates
+                triggers = []
+                found += 1
+                _handle_notice(_notice(acct.id, "unreadable"), state, dry_run, report)
         triggers += event_triggers
         if not triggers:
             continue
+        pressed = state["pressed"].get(acct.id)
+        in_cooldown = pressed is not None and pressed > now() - COOLDOWN_S
+        acting = mode != "alert" and not in_cooldown
         for f in triggers:
-            report(f)
+            key = _key(f)
+            fresh = key not in state["seen"]
+            if fresh and not dry_run:
+                state["seen"].append(key)
+            if fresh or acting:
+                report(f)
+            else:  # persistent finding: same line, no repeat notification
+                lines.append(f"notify {f.account}: {f.text}")
         if mode == "alert":
             continue
-        if state["pressed"].get(acct.id, 0) > now() - COOLDOWN_S:
+        if in_cooldown:
             lines.append(f"{acct.id}: the watch is already handling this")
             continue
         targets = [t for t in downstream(acct.id, edges)
@@ -104,7 +120,7 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
 
 
 def _handle_notice(f: Finding, state: dict, dry_run: bool, report: Callable[[Finding], None]) -> None:
-    key = f"{f.account}|{f.code}|{'|'.join(f.items)}"
+    key = _key(f)
     if key in state["seen"]:
         return
     if not dry_run:

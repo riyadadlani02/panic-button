@@ -28,6 +28,18 @@ class Counting(FakeConnector):
         return {}
 
 
+class SecondReadFails(FakeConnector):
+    def __init__(self):
+        super().__init__()
+        self.snaps = 0
+
+    def snapshot(self, account):
+        self.snaps += 1
+        if self.snaps > 1:
+            raise RuntimeError("down")
+        return {}
+
+
 class Broken(FakeConnector):
     def snapshot(self, account):
         raise RuntimeError("down")
@@ -135,3 +147,31 @@ def test_dry_run_changes_nothing():
 def test_heartbeat_line():
     lines, *_ = run(conns={"mail": conn()}, now=lambda: 0)
     assert lines[-1] == "00:00:00 read 1 accounts, 0 findings"
+
+
+def test_failed_confirming_read_drops_triggers_with_unreadable_notice():
+    c = SecondReadFails()
+    c.findings = [TRIG]
+    _, acts, notes, *_ = run(conns={"mail": c})
+    assert not acts and [n.code for n in notes] == ["unreadable"]
+
+
+def test_persistent_trigger_in_alert_mode_notifies_once_but_returns_line_each_pass():
+    state, c = new_state(), {"mail": conn([TRIG])}
+    l1, _, n1, *_ = run(conns=c, state=state, mode="alert")
+    l2, _, n2, *_ = run(conns=c, state=state, mode="alert")
+    assert len(n1) + len(n2) == 1
+    assert sum("rule_forwards" in ln or TRIG.text in ln for ln in l1 + l2) == 2
+
+
+def test_trigger_in_cooldown_does_not_notify_again():
+    state, c, t = new_state(), {"mail": conn([TRIG])}, [10.0]
+    _, _, n1, *_ = run(conns=c, state=state, now=lambda: t[0])
+    t[0] += 300
+    _, acts, n2, *_ = run(conns=c, state=state, now=lambda: t[0])
+    assert len(n1) == 1 and not n2 and not acts
+
+
+def test_first_press_works_with_small_now():
+    _, acts, *_ = run(conns={"mail": conn([TRIG])}, now=lambda: 10)
+    assert len(acts) == 1
