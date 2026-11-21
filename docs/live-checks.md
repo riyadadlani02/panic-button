@@ -9,7 +9,7 @@ Before each check, make a vault and key file you can delete afterwards, and pass
 Press, watch and rehearse have run on a real throwaway account. The guard has not.
 
 1. `panic rehearse`: expect "matches the baseline" for the account and a plan listing POP and filters as API steps.
-2. `panic guard --dry-run --interval 30`, stopped with Ctrl-C after one pass: expect the "Guarding every 30s" line and one heartbeat line ("read 1 accounts, 0 findings"), and nothing else.
+2. `panic guard --dry-run --interval 30`, stopped with Ctrl-C after one pass: expect the "Guarding every 30s" line and one heartbeat line ("read 1 accounts, 0 findings, 0 skipped"), and nothing else.
 3. `panic guard --on-detect alert --interval 30`. In the Gmail web page add a filter that only applies a label. Expect, within one interval, a notice that something else on the account changed, no press, and no "outcomes" in `panic report`. Gmail's page can show stale data: reload the whole page.
 4. In the same run, add a filter that skips the inbox and marks as read (or deletes) and one that forwards. Expect a notification naming the trigger and, because the mode is `alert`, no press.
 5. Stop the guard. Remove the test filters in the browser, run `panic rehearse` and approve the baseline if it shows a difference. Start `panic guard --interval 30` (mode `press`). Add a hiding filter in the browser. Expect: noticed within one interval, a notification, the filter deleted, POP off, guided steps listed under "Needs you" with nobody asked, and a "What triggered this press" section in the report.
@@ -23,12 +23,13 @@ Known delay: a filter created in the web page can take over a minute to reach th
 Never run on a real tenant. Use a test tenant and a test user, and a separate break-glass admin.
 
 1. `panic arm --workspace ...` then `panic map` and `panic rehearse`. Expect every user armed, the admin shown as protected, and "no flagged changes" for each user.
-2. The fifth scope. Before arming, authorise only the first four scopes in domain-wide delegation and run `panic guard --dry-run --interval 30`. Expect a notice that the activity log could not be read. Then add `admin.reports.audit.readonly` and expect no such notice.
+2. The fifth scope. Before arming, authorise only the four press scopes in domain-wide delegation. Expect arm, `panic rehearse` and `panic press --user TESTUSER --dry-run` to work, and `panic guard --dry-run --interval 30` to show a notice that the activity log could not be read. Then add `admin.reports.audit.readonly` and expect no such notice.
 3. `panic press --user TESTUSER --dry-run`: expect the plan and nothing changed.
 4. Gmail settings on a suspended user. `panic press --user TESTUSER`. Expect the filters, forwarding, IMAP and POP steps to read back as Verified after the suspend. If they fail on the suspended user, the step order has to change (settings first, suspend last); record the exact error.
 5. `panic release --user TESTUSER`: expect a temporary password shown once and sign-in restored.
-6. Reports API event names. In the test tenant, trigger a Google-flagged sign-in if you can (a sign-in from an unusual location through a VPN), then run `panic guard --on-detect alert --interval 30`. Expect a notice naming a provider-flagged sign-in. Compare the event names Google logged with `SUSPICIOUS` in `panic/google_workspace.py` and correct the set.
+6. Reports API event names. In the test tenant, trigger a Google-flagged sign-in if you can (a sign-in from an unusual location through a VPN). Within two hours of that sign-in, start `panic guard --on-detect alert --interval 30`: the guard reads the log from two hours before it started. Expect a notification naming a provider-flagged sign-in within one interval, and no second notification for the same event on later passes. Compare the event names Google logged (in the Admin console's audit log) with `SUSPICIOUS` in `panic/google_workspace.py` and correct the set.
 7. `panic guard --interval 30` on the test user with a new forwarding address outside the domain: expect an automatic press. Then one inside the domain: expect no trigger.
+8. Second domain. If the organisation has a second domain, add a forwarding address in it: the tool treats it as outside and presses. Record this; it is a known limit, not a fix in this milestone.
 
 ## Microsoft 365
 
@@ -43,6 +44,9 @@ Use a test tenant where you are admin, a test user and a separate break-glass ad
 7. Guard: with `panic guard --interval 30`, add an inbox rule that forwards outside the tenant's domains: expect a press. Add one that forwards inside the domain: expect no trigger.
 8. Authentication methods are read and signalled, not removed. Add a method for the test user: expect a trigger and a press, and the method still present afterwards, with the report not claiming it was removed.
 9. Mailbox-level forwarding and mailbox delegates cannot be read through Graph. Set each on the test mailbox in the Exchange admin centre: expect that neither is noticed, and that the plan lists both as guided steps.
+10. A user without a mailbox (an unlicensed account). Expect it armed with no baseline or reported unreadable by the guard on every pass. Record the error Graph returns.
+11. Internal rule recipients. Add an inbox rule that forwards to another user in the tenant and read the stored rule (`panic removed` after a press, or the baseline). Record whether Graph gives the recipient as an address with "@" or as a legacy Exchange address without one; the latter would be counted as outside the organisation and trigger a press.
+12. Stable rule forms. Run `panic rehearse` twice with no change in between. Expect "no flagged changes" both times; a difference means the stored canonical rule is not stable between reads. Do the same for Gmail filters on Workspace (check 1).
 
 ## Personal Microsoft (Outlook.com)
 
@@ -74,10 +78,10 @@ What can be tested depends on the plan. Record the plan the tool printed.
 1. `panic arm --slack --token-file FILE`. Expect the detected plan and the line saying what the tool can do on it. If a non-Enterprise token gets a 403 or 404 from the audit API, plan detection falls through to the next probe; if it gets a 401 instead, arm fails with an error. Record the status and the error name, per plan.
 2. If the token cannot list emails, expect arm to refuse and name the `users:read.email` scope. Confirm that scope is the one missing.
 3. `panic rehearse`: expect "matches the baseline" on Enterprise and Business+ (the baseline is only the member's active flag) and nothing to compare on Pro and Free.
-4. Business+ and Enterprise: `panic press --user MEMBER --dry-run`, then `panic press --user MEMBER` on a test member. Expect the member deactivated and read back as Verified. If SCIM answers with an error, record the exact `PATCH` body and the response; the body shape `{"active": false}` is unconfirmed.
-5. `panic release --user MEMBER`: expect "Member reactivated" and the member able to sign in.
+4. Business+ and Enterprise: `panic press --user slack:EMAIL --dry-run`, then `panic press --user slack:EMAIL` on a test member (Slack account ids are `slack:` and the member's email). Expect the member deactivated and read back as Verified. If SCIM answers with an error, record the exact `PATCH` body and the response; the body shape `{"active": false}` is unconfirmed.
+5. `panic release --user slack:EMAIL`: expect "Member reactivated" and the member able to sign in.
 6. Enterprise Grid: expect the "Sign the member out of every session" step to succeed. If `admin.users.session.reset` answers with a missing `team_id` error, the call needs the workspace's team id; record the exact error.
-7. `team.accessLogs` on Pro and Business+: run `panic guard --interval 30` and sign in from a new network. Expect a notice naming the new address and no press. Record whether Pro answers the call at all.
+7. `team.accessLogs` on Pro and Business+: run `panic guard --interval 30` and sign in from a new network. Expect a notice that new access appeared on the member's account, without the address (organisation accounts withhold a finding's items), and no press. Record whether Pro answers the call at all.
 8. Enterprise Grid audit log: expect an `anomaly` or `user_logout_compromised` event for a member to produce a trigger. This is hard to cause on purpose; if no real event appears, record that the trigger path was not exercised.
 9. Enterprise Grid workspace addresses. In a Grid organisation, check that `auth.test` returns a workspace address the guided links can use (`https://NAME.slack.com/...`). Record the form it takes.
 10. Pro and Free: expect the plan to list "Deactivate the member" as a guided step with a link to the admin page, and `panic release` to refuse.

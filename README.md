@@ -4,13 +4,13 @@ One command that stops an attacker in your connected accounts, root account firs
 
 ## What it promises
 
-1. Everything a provider lets software revoke is revoked and then read back to prove it, root account first. Some steps have no read-back: on Workspace, sign-out, backup codes and the password reset; on Microsoft 365, sign-out; on a personal account, most guided steps. Those are never called verified: the report marks them "Accepted by provider" or "Owner confirmed".
+1. Everything a provider lets software revoke is revoked and then read back to prove it, root account first. Some steps have no read-back: on Workspace, sign-out, backup codes and the password reset; on Microsoft 365, sign-out; on Slack Enterprise Grid, the session reset; on a personal account, most guided steps. Those are never called verified: the report marks them "Accepted by provider" or "Owner confirmed".
 2. Anything that cannot be revoked is listed by name with when it expires. Unknown counts as open; the report never says "safe" by default.
 3. For 24 hours afterwards, while `panic press`, `panic watch` or `panic guard` keeps running, the tool re-checks the settings the API can read and puts back those it can change (the steps marked "reapply" in the table below). Other changes are reported, not undone.
 4. The tool itself is not a master key: a stolen laptop or a stolen vault file opens nothing, because opening needs both your passphrase and a separate key file.
 5. A lockdown never costs you your account: for personal accounts arming asks you to confirm a recovery path you control; organisation tenants rely on a named break-glass admin (Slack: the primary owner), which no command will act on. No password is changed by API in personal mode.
 6. The guard decides from a fixed list of rules, listed under "Guard" below. No model is involved. It re-reads an account before it presses, presses an account at most once in 24 hours, and never presses a protected account.
-7. Nothing irreversible runs on its own. No GitHub member is removed and no Slack app is uninstalled. Everything a press deletes is kept in the vault, and `panic removed --user ID` prints it so it can be put back.
+7. Nothing irreversible runs on its own. No GitHub member is removed and no Slack app is uninstalled. What a press deletes is recorded in the vault as the tool read it, and `panic removed --user ID` prints it so it can be put back by hand. Some of it cannot be restored from that record: a webhook's URL and secret (only the address without its secret and a fingerprint are kept), a GPG key beyond its id, and Workspace app passwords.
 
 ## What a Workspace press does to a user
 
@@ -24,8 +24,10 @@ It suspends the account, resets the password to a random value nobody is told, r
 - The guard keeps the vault open in memory for as long as it runs. Run it only on a computer you trust.
 - The guard does not restart after a reboot, a logout or a crash. You start it again and type the passphrase.
 - An automatic press on a personal account runs API steps only. Guided steps are recorded as "Needs you" and nobody is asked. It never changes a password.
-- Your own change that matches a trigger gets pressed. Adding an SSH key to GitHub, a forwarding rule to Outlook or a new authentication method on Microsoft 365 is a trigger. Approve the change with `panic rehearse` straight after making it, while the guard is running or before you start it.
-- The guard checks every few minutes (300 seconds by default), so a break-in is noticed up to one interval late. A guard that cannot read an account reports that it could not and does not press.
+- Your own change that matches a trigger gets pressed. Adding an SSH key to GitHub, a forwarding rule to Outlook or a new authentication method on Microsoft 365 is a trigger. Before making one, stop the guard or restart it with `--on-detect alert`; make the change, run `panic rehearse` and approve it, then start the guard again.
+- The guard checks every few minutes (300 seconds by default), so a break-in is noticed up to one interval late. A guard that cannot read an account reports that it could not and does not press; it prints that line every pass and notifies again every hour while it lasts.
+- The provider-verdict triggers (a Workspace sign-in Google marks suspicious, a Microsoft 365 risk detection rated high, a Slack Enterprise Grid anomaly) are unproven until checked on a real tenant. Each provider log is read again two hours back from the last read, because entries can appear late; one that appears later than that is missed.
+- One address can be armed under only one mail tenant: a user in both Google Workspace and Microsoft 365 is armed under the first and skipped by the second. Slack members are separate accounts (`slack:<email>`), so Slack can be armed beside either.
 - Personal Gmail has no API for sign-out, connected apps, forwarding or password change, so those are guided steps you confirm by hand.
 - Personal Gmail has no IMAP switch: IMAP is always on. A mail client an attacker connected is cut off only by deleting app passwords, removing connected apps and changing the password, which are guided steps.
 - Mailbox-level forwarding and mailbox delegates on Microsoft 365 are outside what the Microsoft Graph API can read. They are guided steps, and the guard cannot see them.
@@ -33,6 +35,8 @@ It suspends the account, resets the password to a random value nobody is told, r
 - On GitHub, tokens, OAuth app access, web sessions, two-factor settings and the password are guided. The tool cannot see a stolen personal access token, and its own token is one of them. Without a security-log API it only sees what was added to the lists it reads.
 - On Slack, what the tool can do depends on the plan, which is detected when you arm. Only Enterprise Grid can sign a member out and read Slack's audit log. Business+ can deactivate. Pro and Free are guided only.
 - A "guided" service (no API) is only a checklist. The tool cannot read it, watch it or detect anything on it. Every link in the shipped catalogue is unverified.
+- A Microsoft 365 user without a mailbox cannot have its inbox rules read, so the guard reports it as unreadable on every pass.
+- Google Workspace treats every address outside the one `--domain` given at arm as outside the organisation, including a second domain of the same organisation.
 - The watch stops when the process stops.
 - The watch does not retry steps that were Still open at press time. Press again.
 - Whether Gmail settings can be changed for a suspended Workspace user is unverified; it is the first Workspace item of the live check list.
@@ -95,7 +99,7 @@ The OAuth client is kept in the vault from the first arm, so `--client-secrets` 
 ## Setup: Google Workspace
 
 1. Create a service account, enable domain-wide delegation for it, and download its JSON key.
-2. In the Admin console authorise the service account's client ID for exactly these five scopes: Admin SDK directory user security, Admin SDK directory user (read/write), Gmail settings basic, Gmail settings sharing, and Admin SDK reports audit (read-only, used to read sign-in alerts). The exact scope URLs are listed in `panic/google_workspace.py`.
+2. In the Admin console authorise the service account's client ID for these four scopes, which every press needs: Admin SDK directory user security, Admin SDK directory user (read/write), Gmail settings basic, Gmail settings sharing. Add a fifth, Admin SDK reports audit (read-only), for the guard to read sign-in alerts; it is requested only for that read, so a press works without it. The exact scope URLs are listed in `panic/google_workspace.py`.
 3. Use a dedicated break-glass admin account. It is the identity the tool acts as and is never a target, even with `--all`.
 
 ```
@@ -150,7 +154,7 @@ An organisation is armed as its own account (`org:NAME`). The tool refuses a tok
 uv run panic --keyfile ~/panic.key arm --slack --token-file token.txt
 ```
 
-The tool finds the plan itself and prints what it can do on it. If it cannot tell, it refuses to arm rather than guess a lower plan. The primary owner is protected. Every other member is armed.
+The tool finds the plan itself and prints what it can do on it. If it cannot tell, it refuses to arm rather than guess a lower plan. The primary owner is protected. Every other member is armed. Slack members are named `slack:<email>` (for example `panic release --user slack:ann@example.com`), so they never clash with the same address in Workspace or Microsoft 365. Arming adds no edge between a mailbox and its Slack member, so a trigger on the mailbox does not press the member.
 
 ## Setup: any other service (guided)
 
@@ -171,7 +175,7 @@ Link kinds: `sign_out`, `devices`, `apps`, `two_factor`, `recovery`, `password`.
 uv run panic --keyfile ~/panic.key guard
 ```
 
-It asks for the passphrase once, then reads every armed account that is not protected and not released, every `--interval` seconds (default 300, minimum 30). It prints one line per pass: the time, how many accounts it read and how many findings it had. It stops on Ctrl-C. Only one guard can run on a vault at a time.
+It asks for the passphrase once, then reads every armed account that is not protected and not unguarded by `panic release`, every `--interval` seconds (default 300, minimum 30). It prints one line per pass: `<HH:MM:SS> read <n> accounts, <k> findings, <m> skipped`, where skipped counts protected accounts, released accounts not yet resumed, and accounts the tool cannot read for signals. It stops on Ctrl-C. A Ctrl-C during an automatic press ends that press (what it did is saved and reported) and the guard carries on; Ctrl-C again once the press is over stops the guard. Only one guard can run on a vault at a time.
 
 **What presses.** Only these findings are triggers. Any other difference from the baseline is a notice: shown once, written to the audit log, never acted on.
 
@@ -183,19 +187,19 @@ It asks for the passphrase once, then reads every armed account that is not prot
 | GitHub | A new SSH, signing or GPG key; a new email address; a new deploy key, webhook, collaborator or invitation (an organisation: a new webhook, deploy key or outside collaborator) |
 | Slack | Enterprise Grid only: an `anomaly` or `user_logout_compromised` audit event for the member. On other plans, new IP addresses in the access log are a notice and nothing triggers |
 
-An ordinary filter (a label, a star) is a notice. A rule the tool cannot parse counts as one that hides mail.
+An ordinary filter (a label, a star) is a notice. A rule the tool cannot parse counts as one that hides mail. A finding is notified once; if it goes away and comes back, it is notified again. On GitHub a renamed or transferred repository is a notice, never a trigger: repository access is recorded by the repository's id.
 
-**What it does on a trigger.** It reads the account a second time and goes on only if the finding is still there (a provider's own high-risk verdict is acted on as it stands). It then notifies you with a macOS notification, a terminal line and bell, and the audit log. With `--on-detect`:
+**What it does on a trigger.** It reads the account a second time and goes on only if the finding is still there (a provider's own high-risk verdict is acted on as it stands). It then notifies you with a macOS notification, a terminal line and bell, and the audit log; the notification says whether the guard is pressing, containing or only alerting. A failed automatic press is notified too, and until you press by hand the guard says so instead of claiming the watch is handling it. With `--on-detect`:
 
 - `press` (the default): presses the account and every account it can reset, root first, from `panic map`. Accounts that can reset it are not pressed; the notification names them as worth checking. Guided steps are recorded as "Needs you" and nobody is asked. The 24-hour watch for those accounts then runs inside the guard. The report gains a "What triggered this press" section.
-- `contain`: runs only the automatic steps marked "reapply" in the table below (remove the rule, switch POP off, delete new keys), then notifies. That includes the account lock itself where the provider has one: it blocks sign-in on Microsoft 365, suspends a Workspace user, and deactivates a Slack member on Enterprise Grid or Business+. Where an account has no such step (Pro and Free Slack, guided services) it behaves as `alert`.
+- `contain`: runs only the automatic steps marked "reapply" in the table below (remove the rule, switch POP off, delete new keys), then notifies. It never locks anyone out: it leaves out suspending a Workspace user, blocking sign-in on Microsoft 365 and deactivating a Slack member, and also Workspace's delegate step, which removes every delegate, baselined or not. Where nothing is left to run (Slack, guided services) it prints that there was nothing to contain and writes no report.
 - `alert`: notifies and does nothing else.
 
-`--dry-run` prints what each pass would have done and changes, notifies and saves nothing.
+`--dry-run` prints what each pass would have done and changes, notifies and saves nothing in the accounts or the guard's state. It may still save a refreshed personal Microsoft sign-in to the vault.
 
-**Limits, stated again.** An account is pressed automatically at most once in 24 hours; later triggers in that window are left to the watch and notified. The protected admin or owner is never pressed. A released account is not watched again until you approve its baseline in `panic rehearse`. For Workspace, Microsoft 365 and Slack, notifications, the log and the report name a finding by its kind and withhold rule contents; `panic removed --user ID` prints them. On GitHub, per-repository reads (deploy keys, webhooks, collaborators, invitations) are repeated once an hour, so those are noticed up to an hour late; keys and email addresses are read every pass.
+**Limits, stated again.** An account is pressed automatically at most once in 24 hours, also when it is downstream of another trigger; later triggers in that window are left to the watch and notified. The protected admin or owner is never pressed. A released account is not guarded again until `panic rehearse` asks "Resume guarding" and you answer yes, and the watch does not lock it again until a new press of that account. For Workspace, Microsoft 365 and Slack, notifications, the log and the report name a finding by its kind and withhold rule contents; `panic removed --user ID` prints them. On GitHub, per-repository reads (deploy keys, webhooks, collaborators, invitations) are repeated once an hour, so those are noticed up to an hour late; keys and email addresses are read every pass.
 
-**Approving your own change.** The guard reloads the vault every pass. After you make a change yourself, run `panic rehearse` in another terminal and approve the new settings as the baseline; the guard uses them from its next pass. If a press already ran, `panic release --user ID` and then `panic rehearse` bring the account back under the guard.
+**Approving your own change.** Stop the guard, or run it with `--on-detect alert`, before you make a change that matches a trigger. Make the change, run `panic rehearse` and approve the new settings as the baseline, then start the guard again. If a press already ran, `panic release --user ID` lifts the lock and takes the account out of the guard; `panic rehearse` shows its state and asks whether to resume guarding it.
 
 ## What each provider does
 
@@ -236,11 +240,11 @@ Global options: `--vault PATH` (default `~/.panic/panic.vault`), `--keyfile PATH
 | `arm --slack --token-file FILE` | Arm a Slack workspace; the plan is detected and the primary owner is protected. |
 | `arm --guided KEY --id LOGIN [--name NAME] [--link KIND=URL ...]` | Add a service with no API as a checklist. |
 | `map` | Which account can reset which, and which to lock first. |
-| `rehearse` | Read every account, show what is outside its baseline, offer to approve it as the new baseline, and recompile the plan. Changes nothing in the accounts. |
+| `rehearse` | Read every account, show what is outside its baseline, offer to approve it as the new baseline, ask whether to resume guarding each released account, and recompile the plan. Changes nothing in the accounts. |
 | `guard [--interval SECONDS] [--on-detect press\|contain\|alert] [--dry-run]` | Poll every armed account and act on a trigger. Default every 300 seconds, minimum 30, default `press`. |
 | `press --user ID ... / --all [--dry-run]` | Lock the chosen accounts root first, write the report, then watch for 24 hours. `--dry-run` changes nothing. |
 | `watch` | Resume the 24-hour watch. |
-| `release --user ID` | Undo the lock: unsuspend a Workspace user with a temporary password, re-enable a Microsoft 365 user, reactivate a Slack member. Other accounts cannot be released. |
+| `release --user ID` | Undo the lock: unsuspend a Workspace user with a temporary password, re-enable a Microsoft 365 user, reactivate a Slack member. The account stays out of the guard until `rehearse` resumes it. Other accounts cannot be released. |
 | `report` | Re-render the report from the last press, list earlier reports; warns if the audit log was changed. |
 | `removed --user ID` | Print, for every press newest first, what it removed from that account and what was outside its baseline, then what the watch removed; unredacted, so it can be restored. |
 | `export DEST` | Copy the vault file. |
