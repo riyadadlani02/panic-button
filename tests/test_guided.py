@@ -47,3 +47,24 @@ def test_nothing_to_read_or_run():
     assert g.check(step, {}) is None
     with pytest.raises(NotImplementedError):
         g.run(step, {})
+
+
+@pytest.mark.parametrize("url", [
+    "https://s.test/\x1b[2Jx", "https://s.test/a b", "https://s.test/a\nb", "https://", "https:///path",
+    "https://www.amazon.com@evil.test/", "http://s.test/", "javascript:alert(1)", "", "https://s.test/\x07",
+])
+def test_invalid_links_rejected(url):
+    from panic.guided import valid_link
+    assert not valid_link(url)
+
+
+def test_valid_link_accepts_plain_https():
+    from panic.guided import valid_link
+    assert valid_link("https://x.com/settings/password?a=1")
+
+
+def test_custom_entry_with_bad_link_raises_naming_key_and_kind_not_url():
+    bad = {"shop": {"name": "S", "verified": True, "links": {"apps": "https://a@evil.test/secret"}}}
+    with pytest.raises(ValueError) as e:
+        Guided(bad)
+    assert "shop" in str(e.value) and "apps" in str(e.value) and "evil.test" not in str(e.value)

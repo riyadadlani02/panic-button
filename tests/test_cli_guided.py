@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from fake import FakeConnector
 from test_cli import armed, bare, cli, open_vault  # noqa: F401
 
@@ -49,3 +51,18 @@ def test_rehearse_skips_guided_accounts(armed, capsys):
     guided.snapshot = lambda a: (_ for _ in ()).throw(AssertionError("must not be read"))
     cli("rehearse", connectors=_connectors(FakeConnector()) | {"guided": guided})
     assert "amazon:me@x.test: guided only, not read" in capsys.readouterr().out
+
+
+def test_real_press_and_dry_run_cover_guided_accounts(armed, capsys):
+    from test_cli import latest_report, patch_watch  # noqa: F401
+    cli("arm", "--guided", "amazon", "--id", "me@x.test", answers=["y", "mail"])
+    conns = _connectors(FakeConnector())
+    assert cli("press", "--all", "--dry-run", connectors=conns) == 0
+    assert "amazon:me@x.test" in capsys.readouterr().out
+    with patch("panic.executor.watch"):
+        cli("press", "--user", "mail", "--user", "amazon:me@x.test", connectors=conns, answers=["n"] * 20)
+    o = open_vault()["outcomes"][-1]
+    g = [r for r in o["results"] if r["step"]["tier"] == "guided"]
+    assert g and all(r["status"] == "needs_you" for r in g)
+    text = latest_report().read_text()
+    assert "## Needs you" in text and "Amazon: " in text.split("## Needs you")[1]

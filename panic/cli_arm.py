@@ -177,7 +177,7 @@ def _guided_entry(d: dict, key: str, name: str | None, links: dict) -> dict | No
 
 
 def _arm_guided(a) -> int:
-    from panic.guided import KINDS
+    from panic.guided import KINDS, valid_link
     if not a.id:
         raise CliError("--guided needs --id LOGIN.")
     key, links = a.guided.lower(), {}
@@ -185,8 +185,8 @@ def _arm_guided(a) -> int:
         kind, _, url = item.partition("=")
         if kind not in {k for k, _, _ in KINDS}:
             raise CliError(f"unknown link kind {kind!r}; use one of " + ", ".join(k for k, _, _ in KINDS) + ".")
-        if not url.startswith("https://"):
-            raise CliError(f"refusing {kind} link: it must start with https://")
+        if not valid_link(url):
+            raise CliError(f"refusing {kind} link: it must be a plain https:// address with a host and no login part")
         links[kind] = url
     s = Session(a, create=True)
     entry = _guided_entry(s.data, key, a.name, links)
