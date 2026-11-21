@@ -15,7 +15,7 @@ from panic.cli_guard import cmd_guard
 from panic.graph import lock_order, resetters
 from panic.model import Outcome, Step
 from panic.session import (WATCH_HOURS, CliError, Session, _connectors, _last_outcome, _outcomes, _private_write,
-                           _recent_results, _record_outcome, _redact, _reload, _same_device, _unprotected, _warn, _yes,
+                           _recent_results, _record_outcome, _redact, _reload, _same_device, _unguarded, _unprotected, _warn, _yes,
                            outcome_from_json, outcome_to_json)
 from panic.vault import VaultError
 
@@ -215,6 +215,7 @@ def cmd_release(a) -> int:
         print("Nothing changed.")
         return 1
     def mark(d: dict, on: bool) -> None:
+        d["unguarded"] = _unguarded(d)
         for k in ("released", "unguarded"):
             d[k] = sorted({*d.get(k, []), uid} if on else set(d.get(k, [])) - {uid})
 

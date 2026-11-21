@@ -151,6 +151,11 @@ class Session:
         log.append(self.log_path, entry)
 
 
+def _unguarded(d: dict) -> list[str]:
+    """Accounts the guard skips; a vault from before `unguarded` existed skips its released accounts."""
+    return list(d["unguarded"]) if "unguarded" in d else list(d.get("released", []))
+
+
 def _upsert(d: dict, account: Account, snap: dict | None) -> None:
     d["accounts"] = [x for x in d["accounts"] if x["id"] != account.id] + [asdict(account)]
     if snap is not None:

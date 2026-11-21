@@ -4,7 +4,7 @@ from pathlib import Path
 
 from panic import executor, google_personal, microsoft_personal
 from panic.model import Account, Step
-from panic.session import ORG_PROVIDERS, RULE_CATEGORIES, YES, CliError, Session, _connectors, _redact, _unprotected, _upsert, _warn, _yes
+from panic.session import ORG_PROVIDERS, RULE_CATEGORIES, YES, CliError, Session, _connectors, _redact, _unguarded, _unprotected, _upsert, _warn, _yes
 
 # Organisation rehearsal shows these as flags only; their contents are never printed.
 WORKSPACE_FLAGS = ("forwarding", "forwarding_addresses", "delegates", "recovery", "consent_grants", "auth_methods",
@@ -411,7 +411,7 @@ def cmd_arm(a) -> int:
 def cmd_rehearse(a) -> int:
     s = Session(a)
     conns, bad, approved, resumed = _connectors(a, s.data, s), False, {}, set()
-    base, unguarded = s.data["baselines"], set(s.data.get("unguarded", []))
+    base, unguarded = s.data["baselines"], set(_unguarded(s.data))
     for acct in s.accounts:
         conn = conns.get(acct.provider)
         if acct.protected or conn is None:
@@ -446,6 +446,6 @@ def cmd_rehearse(a) -> int:
     if approved or resumed:  # an unchanged rehearsal must not reset saved_at on an exported copy
         def change(d: dict) -> None:
             d["baselines"].update(approved)
-            d["unguarded"] = [u for u in d.get("unguarded", []) if u not in resumed]
+            d["unguarded"] = [u for u in _unguarded(d) if u not in resumed]
         s.update(change)
     return 1 if bad else 0

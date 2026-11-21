@@ -947,6 +947,19 @@ def test_contain_with_nothing_to_contain_writes_nothing(guard, capsys):
     guard.run("--on-detect", "contain", "--passes", "1")
     assert fake.ran == [] and "outcomes" not in open_vault() and reports() == []
     assert "nothing to contain" in capsys.readouterr().out
+    assert "will try to contain" in guard.notes[0][1] and "Containing now" not in guard.notes[0][1]
+
+
+def test_an_old_vault_keeps_its_released_accounts_unguarded(guard):
+    d = open_vault()
+    d["released"] = ["mail"]
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    trigger("mail")
+    guard.run("--passes", "1")
+    assert "outcomes" not in open_vault() and guard.notes == []
+    fake.signals = lambda acct, snap, base: []
+    cli("rehearse", answers=["y"])  # mail is offered for resuming
+    assert open_vault()["unguarded"] == []
 
 
 def test_dry_run_changes_nothing(guard):

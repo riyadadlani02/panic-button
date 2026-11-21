@@ -229,11 +229,18 @@ class GitHub:
             raise KeyError(f"no baseline recorded for {category} on {step.account}")
         return baseline[category]
 
+    def _known_all(self, step: Step, baseline: Snapshot) -> dict[str, list[str]]:
+        cats = STEP_CATS[step.action]
+        if set(cats) & set(_REPO_READERS):
+            # A baseline from before items carried repo_id matches nothing: it must not mean "delete all".
+            self._known(step, baseline, REPOS)
+        return {c: self._known(step, baseline, c) for c in cats}
+
     def run(self, step: Step, baseline: Snapshot) -> None:
         if step.action not in STEP_CATS:
             raise NotImplementedError(f"{step.action} is a guided step")
         cats = STEP_CATS[step.action]
-        known = {c: self._known(step, baseline, c) for c in cats}
+        known = self._known_all(step, baseline)
         entries = self._entries(Account(step.account, self.provider), cats, fresh=True)  # every list read before any delete
         api = self._api(step.account)
         for cat in cats:
@@ -254,6 +261,6 @@ class GitHub:
         if step.action not in STEP_CATS:
             return None
         cats = STEP_CATS[step.action]
-        known = {c: self._known(step, baseline, c) for c in cats}
+        known = self._known_all(step, baseline)
         entries = self._entries(Account(step.account, self.provider), cats, fresh=True)
         return all(item in known[c] for c, es in entries.items() for item, _ in es)

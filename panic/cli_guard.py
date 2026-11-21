@@ -9,7 +9,7 @@ from panic import executor
 from panic.guard import guard_once, load_state
 from panic.model import Account, Finding, Outcome, Severity, Tier, WatchPolicy
 from panic.session import (ORG_PROVIDERS, CliError, Session, _connectors, _outcomes, _recent_results, _reload,
-                           _warn)
+                           _unguarded, _warn)
 
 MIN_INTERVAL_S = 30
 # Contain never locks anyone out, and Workspace's delegates step removes every delegate, baselined or not.
@@ -91,7 +91,7 @@ def cmd_guard(a) -> int:
                         return False
 
                 per_acct = {x.id: conns[x.provider] for x in accounts if x.provider in conns}
-                for line in guard_once(accounts, edges, per_acct, data["baselines"], set(data.get("unguarded", [])),
+                for line in guard_once(accounts, edges, per_acct, data["baselines"], set(_unguarded(data)),
                                        state, a.on_detect, act, notifier, save, dry_run=a.dry_run):
                     print(line)
                 if not a.dry_run:

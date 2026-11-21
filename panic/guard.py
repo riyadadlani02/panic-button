@@ -111,10 +111,11 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
             cursor = state["cursors"].get(acct.id)
             since = (t if cursor is None else cursor) - EVENT_OVERLAP_S
             try:
-                ev = [f for f in conn.events(acct, since) if not f.key or f.key not in events_seen]
+                # Per account: one provider entry can name several members.
+                ev = [f for f in conn.events(acct, since) if not f.key or f"{f.account}|{f.key}" not in events_seen]
                 if not dry_run:
                     state["cursors"][acct.id] = t
-                    events_seen.update({f.key: t for f in ev if f.key})
+                    events_seen.update({f"{f.account}|{f.key}": t for f in ev if f.key})
                 forget(_notice(acct.id, "events_unreadable"))
             except Exception:  # the window stays unread: the cursor does not move
                 events_ok = False
@@ -150,7 +151,8 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
             doing = (" The automatic press failed: run `panic press` by hand." if failed
                      else " The watch is already handling this.")
         else:
-            doing = " Pressing now." if mode == "press" else " Containing now; no account is locked."
+            doing = (" Pressing now." if mode == "press"
+                     else " The guard will try to contain it: remove what was added, never lock an account.")
         acting = mode != "alert" and not in_cooldown
         for f in triggers:
             fresh = _key(f) not in seen

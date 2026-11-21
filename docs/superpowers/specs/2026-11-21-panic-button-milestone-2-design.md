@@ -82,7 +82,7 @@ An ordinary filter (a label, a star, "never spam") is a `NOTICE`. The owner's ow
 
 `panic guard [--interval SECONDS] [--on-detect press|contain|alert] [--dry-run]`. Default interval 300, default `press`.
 
-Each pass, for every armed account that is not protected and not released:
+Each pass, for every armed account that is not protected and not unguarded:
 
 1. Read the snapshot and any events. A failed read is a `NOTICE` ("could not read"), never a trigger.
 2. Compute findings. Log and print each `NOTICE` once per distinct finding.
@@ -100,7 +100,7 @@ Notification is a macOS notification, a terminal line and bell, the audit log, a
 ### Never lock the owner out, under automatic press
 
 - The protected admin is never pressed, by the owner or by the guard.
-- An org press stays reversible with `panic release`. A released account is not pressed again by the guard until its baseline is approved in a rehearsal.
+- An org press stays reversible with `panic release`. Release stops the watch re-applying the lock until the account is pressed again, and takes the account out of the guard; it is not pressed again by the guard until `panic rehearse` asks whether to resume guarding it and the owner says yes.
 - On personal accounts an automatic press can only run API steps. It never changes a password.
 - Org triggers are the strict list above. A staff member's ordinary filter never suspends them.
 
@@ -128,7 +128,7 @@ These are Claude's calls, made to answer a reviewer's questions.
 - **Pacing.** A pass never overlaps the next: the interval is the pause between passes. Per-repository GitHub reads (deploy keys, webhooks, collaborators) run once an hour, limited to repositories the account owns; keys and emails are read every pass.
 - **One loop.** The guard calls the existing `press` with a confirm that answers "not asked", then runs `watch_once` for pressed accounts on each later pass. It never sleeps inside a 24-hour watch.
 - **Changes made elsewhere.** The guard reloads the vault each pass, so a `rehearse` approval, a `release` or a reconnected token made in another terminal applies from the next pass.
-- **Released accounts.** Approving an account's baseline in `panic rehearse` removes it from the released list, which is what lets the guard watch it again.
+- **Released accounts.** `panic release` puts the account on two lists: `released`, which stops the watch re-applying its lock until a new press of that account, and `unguarded`, which makes the guard skip it. `panic rehearse` shows its state and asks whether to resume guarding it; yes removes it from `unguarded` only.
 - **Guard state.** Notices already shown, event cursors and the time of each automatic press are kept in the vault, so a restart neither repeats notices nor presses twice.
 - **`contain`.** Runs each connector's "reapply" steps: inbox rules and consent grants on Microsoft; keys, emails, deploy keys, webhooks and collaborators on GitHub; nothing on Slack, where it behaves as `alert`.
 - **Arming.** One arm form per provider (tenant id, client id and secret for Microsoft 365; the owner's own public-client id for personal Microsoft, with `--reconnect` as Gmail has; a token file for GitHub; app tokens for Slack). For a guided account `--id` is the login name on that service. Arm asks which armed accounts can reset the new one, as it does today, which is how guided accounts get their edges.

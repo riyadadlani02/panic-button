@@ -293,7 +293,7 @@ def test_an_event_already_seen_is_skipped_and_forgotten_after_two_days():
     _, acts, *_ = run(conns={"mail": c}, state=state, mode="alert", now=lambda: t[0])
     t[0] += 300
     lines, *_ = run(conns={"mail": c}, state=state, mode="alert", now=lambda: t[0])
-    assert "evt-1" in state["events_seen"] and lines[-1].endswith("0 findings, 0 skipped")
+    assert "mail|evt-1" in state["events_seen"] and lines[-1].endswith("0 findings, 0 skipped")
     t[0] += 48 * 3600 + 1
     c.event_findings = []
     run(conns={"mail": c}, state=state, mode="alert", now=lambda: t[0])
@@ -331,7 +331,7 @@ def test_a_failed_press_says_so_while_in_cooldown():
 
 
 def test_the_trigger_notification_says_what_the_guard_does():
-    for mode, words in (("press", "Pressing"), ("contain", "Containing"), ("alert", "Alert only")):
+    for mode, words in (("press", "Pressing"), ("contain", "contain it"), ("alert", "Alert only")):
         extras = []
         guard_once([Account("mail", "fake")], [], {"mail": conn([TRIG])}, {"mail": {}}, set(), new_state(), mode,
                    lambda t, f: None, lambda f, extra: extras.append(extra), lambda: None, lambda: 1e6)
@@ -344,3 +344,13 @@ def test_also_check_is_only_added_to_triggers():
     t = Finding("bank", "key_added", Severity.TRIGGER, "key")
     lines, *_ = run(accts, [("mail", "bank")], {"mail": conn(), "bank": conn([n, t])}, mode="alert")
     assert [ln for ln in lines if "Also check: mail" in ln] == ["notify bank: key Also check: mail"]
+
+
+def test_the_same_event_key_on_two_accounts_acts_on_both():
+    accts = [Account("x", "fake"), Account("y", "fake")]
+    conns = {}
+    for a in ("x", "y"):
+        conns[a] = Since()
+        conns[a].event_findings = [Finding(a, "provider_flagged_login", Severity.TRIGGER, "f", ("anomaly",), key="e-1")]
+    _, acts, *_ = run(accts, conns=conns)
+    assert [t for t, _ in acts] == [["x"], ["y"]]

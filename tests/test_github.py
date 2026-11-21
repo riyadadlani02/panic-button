@@ -185,7 +185,8 @@ def test_org_access_removes_what_is_outside_the_baseline():
     api = FakeApi({"/orgs/acme/hooks": [{"id": 1, "config": {"url": "https://h.test"}, "events": ["push"]}],
                    "/orgs/acme/outside_collaborators": [{"login": "bob"}]})
     c = gh(api)
-    c.run(step(c, "org_access", ORG), {"org_webhooks": [], "outside_collaborators": [], "deploy_keys": []})
+    c.run(step(c, "org_access", ORG), {"org_webhooks": [], "outside_collaborators": [], "deploy_keys": [],
+                                       "repositories": []})
     assert api.deleted == ["/orgs/acme/hooks/1", "/orgs/acme/outside_collaborators/bob"]
 
 
@@ -298,3 +299,18 @@ def test_an_invitation_without_an_invitee_is_still_read():
                                            {"id": 9, "invitee": None, "permissions": "read"}]
     assert gh(api).snapshot(ME)["invitations"] == [item(email="x@y.test", permissions="read", repo_id=11),
                                                    item(id=9, permissions="read", repo_id=11)]
+
+
+def test_a_baseline_without_repositories_fails_closed_before_any_delete():
+    api = personal_api()
+    c = gh(api)
+    base = {k: v for k, v in c.snapshot(ME).items() if k != "repositories"}
+    base = {**base, **{k: [] for k in REPO_CATS}}
+    with pytest.raises(KeyError, match="no baseline recorded for repositories on me"):
+        c.run(step(c, "repo_access"), base)
+    with pytest.raises(KeyError, match="no baseline recorded for repositories on me"):
+        c.check(step(c, "repo_access"), base)
+    org = {"org_webhooks": [], "outside_collaborators": [], "deploy_keys": []}
+    with pytest.raises(KeyError, match="repositories"):
+        c.run(step(c, "org_access", ORG), org)
+    assert api.deleted == []
