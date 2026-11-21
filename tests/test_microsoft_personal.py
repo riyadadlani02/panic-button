@@ -101,3 +101,22 @@ def test_an_unchanged_cache_is_not_saved(monkeypatch):
     saved = []
     MicrosoftPersonal({ACCT.id: {"client_id": "c", "cache": "x"}}, on_refresh=lambda *a: saved.append(a))._token(ACCT.id)
     assert saved == []
+
+
+def test_a_failed_save_still_returns_the_token_and_is_retried(monkeypatch, capsys):
+    fake_msal(monkeypatch, {"access_token": "T"}, rotate=True)
+    saved = []
+
+    def save(a, t):
+        if not saved and not boom:
+            boom.append(1)
+            raise OSError("disk full")
+        saved.append(t)
+
+    boom = []
+    c = MicrosoftPersonal({ACCT.id: {"client_id": "c", "cache": "x"}}, on_refresh=save)
+    assert c._token(ACCT.id) == "T" and saved == []
+    err = capsys.readouterr().err
+    assert ACCT.id in err and "OSError: disk full" in err and "rotated" not in err
+    assert c._token(ACCT.id) == "T" and saved == [{"client_id": "c", "cache": "rotated"}]
+    assert capsys.readouterr().err == ""

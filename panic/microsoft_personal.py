@@ -1,4 +1,5 @@
 """Connector for an individual's own Outlook.com / Hotmail account, signed in by the owner."""
+import sys
 import threading
 from collections.abc import Callable
 
@@ -52,7 +53,7 @@ class MicrosoftPersonal:
     def __init__(self, tokens: dict[str, dict], api: Api | None = None, token: Callable[[str], str] | None = None,
                  on_refresh: Callable[[str, dict], None] | None = None):
         self._tokens, self._on_refresh, self._shared_api = dict(tokens), on_refresh, api
-        self._lock, self._apis = threading.Lock(), {}
+        self._lock, self._apis, self._dirty = threading.Lock(), {}, set()  # dirty: rotated but not yet saved
         self._token = token or self._silent
 
     def _silent(self, account_id: str) -> str:
@@ -67,9 +68,15 @@ class MicrosoftPersonal:
             known = app.get_accounts()
             r = app.acquire_token_silent(SCOPES, account=known[0]) if known else None
             if cache.has_state_changed:  # msal rotates refresh tokens: a stale stored cache would stop working
-                self._tokens[account_id] = tok = {**tok, "cache": cache.serialize()}
-                if self._on_refresh:
-                    self._on_refresh(account_id, tok)
+                self._tokens[account_id] = {**tok, "cache": cache.serialize()}
+                self._dirty.add(account_id)
+            if account_id in self._dirty and self._on_refresh:
+                try:  # a failed save must not throw away a valid token; the next call retries it
+                    self._on_refresh(account_id, self._tokens[account_id])
+                    self._dirty.discard(account_id)
+                except Exception as e:
+                    print(f"Warning: could not save the refreshed sign-in for {account_id}: "
+                          f"{type(e).__name__}: {e}", file=sys.stderr)
         if not r or "access_token" not in r:
             raise RuntimeError(EXPIRED)
         return r["access_token"]
