@@ -167,6 +167,9 @@ def _connectors(a, data: dict) -> dict:
     if "google_workspace" in cred:
         w = cred["google_workspace"]
         out["google_workspace"] = Workspace(w["sa_info"], w["admin"], w["domain"])
+    if any(x["provider"] == "guided" for x in data["accounts"]):
+        from panic.guided import Guided
+        out["guided"] = Guided(cred.get("guided"))
     return out
 
 

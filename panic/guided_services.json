@@ -1,0 +1,39 @@
+{
+  "apple": {"name": "Apple", "verified": false, "links": {
+    "devices": "https://account.apple.com/account/manage/section/devices",
+    "two_factor": "https://account.apple.com/account/manage/section/security",
+    "password": "https://account.apple.com/account/manage/section/security"}},
+  "amazon": {"name": "Amazon", "verified": false, "links": {
+    "two_factor": "https://www.amazon.com/ax/account/manage",
+    "recovery": "https://www.amazon.com/ax/account/manage",
+    "password": "https://www.amazon.com/ax/account/manage"}},
+  "facebook": {"name": "Facebook", "verified": false, "links": {
+    "apps": "https://www.facebook.com/settings?tab=applications",
+    "two_factor": "https://accountscenter.facebook.com/password_and_security",
+    "password": "https://accountscenter.facebook.com/password_and_security"}},
+  "instagram": {"name": "Instagram", "verified": false, "links": {
+    "apps": "https://www.instagram.com/accounts/manage_access/",
+    "two_factor": "https://accountscenter.instagram.com/password_and_security/",
+    "password": "https://accountscenter.instagram.com/password_and_security/"}},
+  "x": {"name": "X", "verified": false, "links": {
+    "devices": "https://x.com/settings/sessions",
+    "apps": "https://x.com/settings/connected_apps",
+    "two_factor": "https://x.com/settings/account/login_verification",
+    "password": "https://x.com/settings/password"}},
+  "linkedin": {"name": "LinkedIn", "verified": false, "links": {
+    "devices": "https://www.linkedin.com/mypreferences/d/where-you-re-signed-in",
+    "apps": "https://www.linkedin.com/mypreferences/d/permitted-services",
+    "two_factor": "https://www.linkedin.com/psettings/two-step-verification",
+    "password": "https://www.linkedin.com/psettings/change-password"}},
+  "paypal": {"name": "PayPal", "verified": false, "links": {
+    "two_factor": "https://www.paypal.com/myaccount/security/",
+    "password": "https://www.paypal.com/myaccount/security/"}},
+  "dropbox": {"name": "Dropbox", "verified": false, "links": {
+    "devices": "https://www.dropbox.com/account/security",
+    "apps": "https://www.dropbox.com/account/security",
+    "two_factor": "https://www.dropbox.com/account/security",
+    "password": "https://www.dropbox.com/account/security"}},
+  "netflix": {"name": "Netflix", "verified": false, "links": {
+    "sign_out": "https://www.netflix.com/account",
+    "password": "https://www.netflix.com/password"}}
+}

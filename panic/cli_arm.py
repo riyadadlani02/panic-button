@@ -162,7 +162,68 @@ def _arm_workspace(a) -> int:
     return 0
 
 
+def _guided_entry(d: dict, key: str, name: str | None, links: dict) -> dict | None:
+    """The custom entry for key after adding links, or None when the catalogue already covers it."""
+    from panic.guided import load_services
+    custom = d["credentials"].get("guided", {})
+    base = custom.get(key) or load_services().get(key)
+    if not links:
+        if base is None:
+            raise CliError(f"{key} is not in the catalogue; give at least one --link KIND=URL.")
+        return None
+    return {"name": name or (base or {}).get("name") or key.title(),
+            "verified": base["verified"] if base else True,  # a link the owner typed is the owner's to trust
+            "links": {**(base or {}).get("links", {}), **links}}
+
+
+def _arm_guided(a) -> int:
+    from panic.guided import KINDS
+    if not a.id:
+        raise CliError("--guided needs --id LOGIN.")
+    key, links = a.guided.lower(), {}
+    for item in a.link:
+        kind, _, url = item.partition("=")
+        if kind not in {k for k, _, _ in KINDS}:
+            raise CliError(f"unknown link kind {kind!r}; use one of " + ", ".join(k for k, _, _ in KINDS) + ".")
+        if not url.startswith("https://"):
+            raise CliError(f"refusing {kind} link: it must start with https://")
+        links[kind] = url
+    s = Session(a, create=True)
+    entry = _guided_entry(s.data, key, a.name, links)
+    acct_id = f"{key}:{a.id}"
+    existing = next((x for x in s.accounts if x.id == acct_id), None)
+    if existing and (existing.protected or existing.provider != "guided"):
+        raise CliError(f"{acct_id} is already armed ({existing.provider}); refusing to replace it.")
+    if not _yes(f"Do you hold a way to recover {acct_id} that does not depend on the account that can reset it "
+                "(printed backup codes or a security key)?"):
+        _warn(f"Not armed: set up a recovery method for {acct_id} that does not depend on it, then arm again.")
+        return 1
+    armed = [x for x in _unprotected(s) if x != acct_id]
+    picks: list[str] = []
+    while armed:
+        raw = input(f"Which of your armed accounts can reset this one? ({', '.join(armed)}; "
+                    "comma-separated, empty for none) ")
+        picks = [p.strip().lower() for p in raw.split(",") if p.strip()]
+        unknown = [p for p in picks if p not in armed]
+        if not unknown:
+            break
+        print("Not armed accounts: " + ", ".join(unknown))
+
+    def change(d: dict) -> None:
+        _upsert(d, Account(acct_id, "guided"), None)  # nothing readable, so no baseline
+        if entry:
+            d["credentials"].setdefault("guided", {})[key] = entry
+        d["edges"] += [[p, acct_id] for p in picks if [p, acct_id] not in d["edges"]]
+
+    s.update(change)
+    print(f"Armed {acct_id}.")
+    print("Guided only: the tool cannot read or watch this account.")
+    return 0
+
+
 def cmd_arm(a) -> int:
+    if a.guided:
+        return _arm_guided(a)
     if a.workspace:
         return _arm_workspace(a)
     if a.personal:
@@ -179,6 +240,9 @@ def cmd_rehearse(a) -> int:
     for acct in s.accounts:
         conn = conns.get(acct.provider)
         if acct.protected or conn is None:
+            continue
+        if acct.provider == "guided":
+            print(f"{acct.id}: guided only, not read")
             continue
         try:
             snap = conn.snapshot(acct)
