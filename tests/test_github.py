@@ -61,7 +61,7 @@ def personal_api():
         "/user/ssh_signing_keys": [{"id": 3, "key": "S1", "title": "sign"}],
         "/user/gpg_keys": [{"id": 4, "key_id": "G1", "name": "gpg"}],
         "/user/emails": [{"email": "me@x.test", "primary": True}, {"email": "evil@x.test", "primary": False}],
-        "/user/repos": [{"full_name": "me/r"}],
+        "/user/repos": [{"id": 11, "full_name": "me/r"}],
         "/repos/me/r/keys": [{"id": 5, "key": "D1", "title": "deploy"}, {"id": 6, "key": "D2", "title": "evil"}],
         "/repos/me/r/hooks": [{"id": 7, "config": {"url": "https://h.test/x"}, "events": ["push", "fork"]}],
         "/repos/me/r/collaborators": [{"login": "me"}, {"login": "bob"}],
@@ -83,25 +83,27 @@ def step(conn, action, account=ME):
 
 def test_personal_snapshot_shape_and_canonical_items():
     snap = gh(personal_api()).snapshot(ME)
-    assert set(snap) == {*KEY_CATS, "emails", *REPO_CATS}
+    assert set(snap) == {*KEY_CATS, "emails", "repositories", *REPO_CATS}
+    assert snap["repositories"] == ["11: me/r"]
     assert snap["ssh_keys"][0] == item(key="K1", title="laptop")
     assert snap["emails"] == [item(email="me@x.test"), item(email="evil@x.test")]
-    assert snap["deploy_keys"][0] == item(key="D1", title="deploy", repo="me/r")
-    assert snap["webhooks"] == [hook("https://h.test/x", ["push", "fork"], repo="me/r")]
-    assert snap["collaborators"] == [item(login="bob", repo="me/r")]  # the owner is not a collaborator
-    assert snap["invitations"] == [item(login="carol", repo="me/r", permissions="write")]
+    assert snap["deploy_keys"][0] == item(key="D1", title="deploy", repo_id=11)
+    assert snap["webhooks"] == [hook("https://h.test/x", ["push", "fork"], repo_id=11)]
+    assert snap["collaborators"] == [item(login="bob", repo_id=11)]  # the owner is not a collaborator
+    assert snap["invitations"] == [item(login="carol", repo_id=11, permissions="write")]
     assert not any('"id"' in i for items in snap.values() for i in items)
 
 
 def test_org_snapshot_shape():
     api = FakeApi({"/orgs/acme/hooks": [{"id": 1, "config": {"url": "https://h.test"}, "events": ["push"]}],
                    "/orgs/acme/outside_collaborators": [{"login": "bob"}],
-                   "/orgs/acme/repos": [{"full_name": "acme/r"}],
+                   "/orgs/acme/repos": [{"id": 12, "full_name": "acme/r"}],
                    "/repos/acme/r/keys": [{"id": 2, "key": "D", "title": "t"}]})
     snap = gh(api).snapshot(ORG)
     assert snap == {"org_webhooks": [hook("https://h.test", ["push"])],
                     "outside_collaborators": [item(login="bob")],
-                    "deploy_keys": [item(key="D", title="t", repo="acme/r")]}
+                    "deploy_keys": [item(key="D", title="t", repo_id=12)],
+                    "repositories": ["12: acme/r"]}
 
 
 def test_baseline_key_survives_and_added_key_is_deleted():
@@ -264,3 +266,35 @@ def test_baseline_webhook_survives_run_and_same_path_other_token_is_deleted():
                                            "events": ["push"]})
     c.run(step(c, "repo_access"), base)
     assert api.deleted == ["/repos/me/r/hooks/2"]
+
+
+def test_a_renamed_repository_is_only_a_changed_notice_and_run_deletes_nothing():
+    api = personal_api()
+    c = gh(api)
+    base = c.snapshot(ME)
+    api.lists["/user/repos"] = [{"id": 11, "full_name": "me/renamed"}]
+    for path in ("keys", "hooks", "collaborators", "invitations"):
+        api.lists[f"/repos/me/renamed/{path}"] = api.lists.pop(f"/repos/me/r/{path}")
+    c.run(step(c, "repo_access"), base)
+    assert api.deleted == [] and c.check(step(c, "repo_access"), base) is True
+    found = c.signals(ME, gh(api).snapshot(ME), base)  # a new connector: the list of repositories is cached
+    assert [(f.code, f.severity, f.items) for f in found] == [("changed", Severity.NOTICE, ("repositories: 11: me/renamed",))]
+
+
+def test_an_org_repository_rename_deletes_no_deploy_key():
+    api = FakeApi({"/orgs/acme/repos": [{"id": 12, "full_name": "acme/r"}],
+                   "/repos/acme/r/keys": [{"id": 2, "key": "D", "title": "t"}]})
+    c = gh(api)
+    base = c.snapshot(ORG)
+    api.lists["/orgs/acme/repos"] = [{"id": 12, "full_name": "acme/new"}]
+    api.lists["/repos/acme/new/keys"] = api.lists.pop("/repos/acme/r/keys")
+    c.run(step(c, "org_access", ORG), base)
+    assert api.deleted == [] and [f.code for f in c.signals(ORG, gh(api).snapshot(ORG), base)] == ["changed"]
+
+
+def test_an_invitation_without_an_invitee_is_still_read():
+    api = personal_api()
+    api.lists["/repos/me/r/invitations"] = [{"id": 8, "invitee": None, "email": "x@y.test", "permissions": "read"},
+                                           {"id": 9, "invitee": None, "permissions": "read"}]
+    assert gh(api).snapshot(ME)["invitations"] == [item(email="x@y.test", permissions="read", repo_id=11),
+                                                   item(id=9, permissions="read", repo_id=11)]

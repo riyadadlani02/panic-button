@@ -18,7 +18,9 @@ R, N = WatchPolicy.REAPPLY, WatchPolicy.NONE
 KEY_CATS = ("ssh_keys", "signing_keys", "gpg_keys")
 REPO_CATS = ("deploy_keys", "webhooks", "collaborators", "invitations")
 ORG_CATS = ("org_webhooks", "outside_collaborators", "deploy_keys")
-SNAPSHOT_CATS = {False: (*KEY_CATS, "emails", *REPO_CATS), True: ORG_CATS}
+# "<id>: <owner/name>", so names stay visible; no step touches it and a change there is only a notice.
+REPOS = "repositories"
+SNAPSHOT_CATS = {False: (*KEY_CATS, "emails", REPOS, *REPO_CATS), True: (*ORG_CATS, REPOS)}
 # API steps and the categories each one covers, in the order it deletes.
 STEP_CATS = {"keys": KEY_CATS, "emails": ("emails",), "repo_access": REPO_CATS, "org_access": ORG_CATS}
 # (action, phase, tier, watch, link, title); links and titles take {name} (login or organisation).
@@ -97,31 +99,41 @@ _READERS = {
 }
 
 
-def _repo_deploy_keys(api, repo):
-    return _read_list(api, f"/repos/{repo}/keys", lambda k: (_j(key=k["key"], title=k["title"], repo=repo),
+# Items name the repository by its numeric id: a rename or transfer must never make baselined access look new.
+# Paths use the current name, read fresh before any delete.
+def _repo_deploy_keys(api, repo, rid):
+    return _read_list(api, f"/repos/{repo}/keys", lambda k: (_j(key=k["key"], title=k["title"], repo_id=rid),
                                                               (f"/repos/{repo}/keys/{k['id']}", None)))
 
 
-def _repo_webhooks(api, repo):
+def _repo_webhooks(api, repo, rid):
     return _read_list(api, f"/repos/{repo}/hooks", lambda h: (
-        _hook_item(h, repo=repo), (f"/repos/{repo}/hooks/{h['id']}", None)))
+        _hook_item(h, repo_id=rid), (f"/repos/{repo}/hooks/{h['id']}", None)))
 
 
-def _repo_collaborators(api, repo):
+def _repo_collaborators(api, repo, rid):
     owner = repo.split("/")[0].casefold()  # the owner is listed as a collaborator of their own repository
     rows = api.pages(f"/repos/{repo}/collaborators", {"affiliation": "direct"})
-    return [(_j(login=u["login"], repo=repo), (f"/repos/{repo}/collaborators/{quote(u['login'])}", None))
+    return [(_j(login=u["login"], repo_id=rid), (f"/repos/{repo}/collaborators/{quote(u['login'])}", None))
             for u in rows if u["login"].casefold() != owner]
 
 
-def _repo_invitations(api, repo):
+def _invitee(i: dict) -> dict:
+    # An invitation by email has no invitee account yet.
+    if isinstance(i.get("invitee"), dict):
+        return {"login": i["invitee"]["login"]}
+    return {"email": i["email"]} if i.get("email") else {"id": i["id"]}
+
+
+def _repo_invitations(api, repo, rid):
     return _read_list(api, f"/repos/{repo}/invitations", lambda i: (
-        _j(login=i["invitee"]["login"], permissions=i.get("permissions", ""), repo=repo),
+        _j(**_invitee(i), permissions=i.get("permissions", ""), repo_id=rid),
         (f"/repos/{repo}/invitations/{i['id']}", None)))
 
 
 _REPO_READERS = {"deploy_keys": _repo_deploy_keys, "webhooks": _repo_webhooks, "collaborators": _repo_collaborators,
                  "invitations": _repo_invitations}
+_HOURLY = (*_REPO_READERS, REPOS)
 
 
 def _is_org(account_id: str) -> bool:
@@ -167,12 +179,13 @@ class GitHub:
     def _read(self, account: Account, cats) -> dict[str, list]:
         api, name, repos, out = self._api(account.id), account.id.removeprefix("org:"), None, {}
         for cat in cats:
-            if cat in _REPO_READERS:
+            if cat in _HOURLY:
                 if repos is None:
                     rows = (api.pages(f"/orgs/{name}/repos", {"type": "all", "per_page": 100}) if _is_org(account.id)
                             else api.pages("/user/repos", {"affiliation": "owner", "per_page": 100}))
-                    repos = [quote(r["full_name"], safe="/") for r in rows]
-                out[cat] = [e for r in repos for e in _REPO_READERS[cat](api, r)]
+                    repos = [(r["id"], r["full_name"]) for r in rows]
+                out[cat] = ([(f"{rid}: {full}", None) for rid, full in repos] if cat == REPOS else
+                            [e for rid, full in repos for e in _REPO_READERS[cat](api, quote(full, safe="/"), rid)])
             else:
                 out[cat] = _READERS[cat](api, name)
         return out
@@ -190,7 +203,7 @@ class GitHub:
             got = self._read(account, need)
             stamp = self._now()
             with self._lock:  # a fresh read also refreshes the cache, or the press's closing snapshot would be stale
-                self._cache.update({(account.id, c): (stamp, es) for c, es in got.items() if c in _REPO_READERS})
+                self._cache.update({(account.id, c): (stamp, es) for c, es in got.items() if c in _HOURLY})
             out.update(got)
         return {c: out[c] for c in cats}
 
@@ -201,7 +214,9 @@ class GitHub:
     def signals(self, account: Account, snapshot: Snapshot, baseline: Snapshot) -> list[Finding]:
         org = _is_org(account.id)
 
-        def classify(cat: str, item: str) -> str:
+        def classify(cat: str, item: str) -> str | None:
+            if cat == REPOS:
+                return None
             if org:
                 return "org_access_added"
             return "key_added" if cat in KEY_CATS else "email_added" if cat == "emails" else "repo_access_added"
