@@ -80,3 +80,23 @@ def test_reconnect_needs_an_armed_account_and_the_same_login(armed, tmp_path):
     assert cli("arm", "--github", "me", "--token-file", token_file(tmp_path, "ghp_x"), "--reconnect",
                connectors={"github": gh(api)}) == 1
     assert open_vault()["credentials"]["github"] == {"me": SECRET}
+
+
+def test_guard_keeps_the_github_connector_and_its_cache_between_passes(armed, tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    import test_cli
+    from panic import github
+    from panic.cli import main
+    api = personal_api()
+    api.objs["/user"] = {"login": "me"}
+    assert arm(tmp_path, api) == 0
+    made = []
+    real_init = github.GitHub.__init__
+    monkeypatch.setattr(github.GitHub, "__init__", lambda self, *a, **k: made.append(self) or real_init(self, *a, **k))
+    monkeypatch.setattr(github, "Api", lambda base, headers: api)
+    reads = api.reads.count("/user/repos")
+    with patch("getpass.getpass", return_value=test_cli.PW):
+        assert main(["--vault", str(test_cli.vpath), "--keyfile", str(test_cli.kpath), "guard", "--passes", "2"],
+                    sleep=lambda s: None, notifier=lambda t, x: None) == 0
+    assert len(made) == 1 and api.reads.count("/user/repos") == reads + 1

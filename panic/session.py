@@ -185,15 +185,26 @@ def _connectors(a, data: dict, s: "Session | None" = None) -> dict:
     if any(x["provider"] == "guided" for x in data["accounts"]):
         from panic.guided import Guided
         out["guided"] = Guided(cred.get("guided"))
+    if s is not None:
+        s.conns_from = _built_from(data)
     return out
 
 
+def _built_from(d: dict) -> tuple:
+    return d["credentials"], sorted((x["id"], x["provider"]) for x in d["accounts"])
+
+
 def _reload(a, s: Session, conns: dict, last: dict) -> dict:
-    """The vault as saved now (the last good copy if it cannot be read); connectors refreshed in place."""
+    """The vault as saved now (the last good copy if it cannot be read); connectors refreshed in place.
+
+    Rebuilt only when what they were built from changed, so a connector's own cache (GitHub's hourly
+    repository reads) outlives a pass."""
     try:
         fresh = vault.load(s.path, s.passphrase, s.key)
     except Exception:
         return last
+    if _built_from(fresh) == getattr(s, "conns_from", None):
+        return fresh
     new = _connectors(a, fresh, s)
     if new is not conns:
         conns.clear()

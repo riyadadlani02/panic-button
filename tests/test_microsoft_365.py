@@ -163,6 +163,13 @@ def test_events_one_finding_for_the_high_detection():
     assert [f.code for f in out] == ["provider_flagged_login"] and out[0].severity is Severity.TRIGGER
 
 
+def test_events_carry_a_stable_key():
+    path = "/identityProtection/riskDetections"
+    api = FakeApi({path: {"value": [{"id": "d1", "riskLevel": "high", "riskEventType": "x"},
+                                    {"riskLevel": "high", "riskEventType": "y", "detectedDateTime": "t"}]}})
+    assert [f.key for f in conn(api).events(Account(A, "microsoft_365"), 0)] == ["d1", "y@t"]
+
+
 def test_events_forbidden_raises_api_error():
     api = FakeApi({"/identityProtection/riskDetections": ApiError(403, "")})
     with pytest.raises(ApiError):

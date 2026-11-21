@@ -266,6 +266,13 @@ def test_events_flag_only_suspicious_logins(conn, directory):
     acts.assert_called_with(userKey="a@corp.test", applicationName="login", startTime="2026-01-02T03:04:05Z")
 
 
+def test_events_carry_a_stable_key(conn, directory):
+    directory.activities().list().execute.return_value = {"items": [
+        {"id": {"uniqueQualifier": "q1", "time": "t1"}, "events": [{"name": "suspicious_login"}]},
+        {"id": {"time": "t2"}, "events": [{"name": "suspicious_login"}]}]}
+    assert [f.key for f in conn.events(ACCT, 0.0)] == ["q1:suspicious_login", "suspicious_login@t2"]
+
+
 def test_signals_and_events_refuse_the_admin(conn):
     from datetime import datetime, timezone
     admin = Account(ADMIN, "google_workspace")

@@ -43,6 +43,7 @@ class Finding:
     severity: Severity
     text: str
     items: tuple[str, ...] = ()
+    key: str = ""  # an event's stable identity, so a re-read log never reports it twice; "" = always new
 
 
 @dataclass(frozen=True)

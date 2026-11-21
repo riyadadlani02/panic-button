@@ -125,9 +125,14 @@ class Microsoft365:
         who = account.id.replace("'", "''")
         found = graph_mail.pages(self._api, "/identityProtection/riskDetections", {
             "$filter": f"userPrincipalName eq '{who}' and detectedDateTime ge {when}"})
-        return [Finding(account.id, "provider_flagged_login", Severity.TRIGGER, TEXT["provider_flagged_login"],
-                        (str(d.get("riskEventType") or "risk detection"),))
-                for d in found if d.get("riskLevel") == "high"]
+        out = []
+        for d in found:
+            if d.get("riskLevel") == "high":
+                kind, when = str(d.get("riskEventType") or "risk detection"), d.get("detectedDateTime")
+                key = str(d.get("id") or (f"{kind}@{when}" if when else ""))
+                out.append(Finding(account.id, "provider_flagged_login", Severity.TRIGGER, TEXT["provider_flagged_login"],
+                                   (kind,), key))
+        return out
 
     # -- writes --------------------------------------------------------
     @staticmethod

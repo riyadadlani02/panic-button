@@ -172,23 +172,31 @@ class Slack:
         if self.plan == "enterprise":
             entries = _cursor_pages(lambda p: self._audit_get({**p, "action": "anomaly,user_logout_compromised",
                                                               "oldest": int(since)}), "entries", "audit log")
-            hits = sorted({str(e.get("action") or "anomaly") for e in entries
-                           if uid in (_user_id(e, "actor"), _user_id(e, "entity"))})
-            return [Finding(account.id, "provider_flagged_login", Severity.TRIGGER,
-                            TEXT["provider_flagged_login"], tuple(hits))] if hits else []
-        ips, page = set(), 1
+            out = []
+            for e in entries:
+                if uid in (_user_id(e, "actor"), _user_id(e, "entity")):
+                    action, when = str(e.get("action") or "anomaly"), e.get("date_create")
+                    key = str(e.get("id") or (f"{action}@{when}" if when else ""))
+                    out.append(Finding(account.id, "provider_flagged_login", Severity.TRIGGER,
+                                       TEXT["provider_flagged_login"], (action,), key))
+            return out
+        ips, page = {}, 1  # ip -> the first new sign-in from it, which names the notice
         while True:
             r = self._call("team.accessLogs", {"count": 1000, "page": page})
             logins, paging = r.get("logins"), r.get("paging")
             pages = paging.get("pages") if isinstance(paging, dict) else None
             if not isinstance(logins, list) or not isinstance(pages, int):
                 raise ApiError(200, "", "Slack team.accessLogs: unexpected response")
-            ips |= {str(e.get("ip")) for e in logins if isinstance(e, dict) and e.get("user_id") == uid
-                    and isinstance(e.get("date_first"), (int, float)) and e["date_first"] > since}
+            for e in logins:
+                if (isinstance(e, dict) and e.get("user_id") == uid
+                        and isinstance(e.get("date_first"), (int, float)) and e["date_first"] > since):
+                    ip = str(e.get("ip"))
+                    ips[ip] = min(ips.get(ip, e["date_first"]), e["date_first"])
             if page >= pages:
                 break
             page += 1
-        return [Finding(account.id, "new_access", Severity.NOTICE, TEXT["new_access"], (ip,)) for ip in sorted(ips)]
+        return [Finding(account.id, "new_access", Severity.NOTICE, TEXT["new_access"], (ip,), f"new_access:{ip}@{ips[ip]}")
+                for ip in sorted(ips)]
 
     # -- writes --------------------------------------------------------
     def _refuse_owner(self, account_id: str) -> None:

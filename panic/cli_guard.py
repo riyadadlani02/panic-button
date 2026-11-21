@@ -6,17 +6,14 @@ import time
 from pathlib import Path
 
 from panic import executor
-from panic.graph import resetters
-from panic.guard import guard_once, new_state
+from panic.guard import guard_once, load_state
 from panic.model import Account, Finding, Outcome, Severity, Tier, WatchPolicy
 from panic.session import (ORG_PROVIDERS, CliError, Session, _connectors, _outcomes, _recent_results, _reload,
                            _warn)
-from panic.signals import TEXT
 
 MIN_INTERVAL_S = 30
 # Contain never locks anyone out, and Workspace's delegates step removes every delegate, baselined or not.
 CONTAIN_SKIP = executor.LOCK_ACTIONS | {"delegates"}
-NOTICE_CODES = {"changed", "unreadable", "events_unreadable"}
 
 
 def _lock(a) -> int:
@@ -38,7 +35,6 @@ def cmd_guard(a) -> int:
         s = Session(a)
         conns = _connectors(a, s.data, s)
         data = s.data
-        texts = {TEXT[c] for c in NOTICE_CODES}
         passes = 0
         print(f"Guarding every {a.interval:g}s, on detect: {a.on_detect}{' (dry run)' if a.dry_run else ''}. Ctrl-C to stop.")
         while True:
@@ -48,26 +44,21 @@ def cmd_guard(a) -> int:
                 accounts = [Account(**x) for x in data["accounts"]]
                 edges = [tuple(e) for e in data["edges"]]
                 org = {x.id for x in accounts if x.provider in ORG_PROVIDERS}
-                state = data.get("guard") or new_state()
+                state = load_state(data.get("guard"))
                 before = copy.deepcopy(state)
-
-                def also(account: str) -> str:
-                    ids = sorted(resetters(account, edges))
-                    return f" Also check: {', '.join(ids)}" if ids else ""
 
                 def shown(f: Finding) -> str:  # items are raw provider data: personal accounts only
                     return f.text if f.account in org or not f.items else f"{f.text} ({'; '.join(f.items)})"
 
-                def notifier(f: Finding) -> None:
-                    trig = f.severity is Severity.TRIGGER
-                    s.log({"event": "guard_trigger" if trig else "guard_notice", "account": f.account, "code": f.code,
-                           "detail": shown(f)})
-                    a.notifier(f"panic: {f.account}", shown(f) + (also(f.account) if trig else ""))
+                def notifier(f: Finding, extra: str) -> None:
+                    s.log({"event": "guard_trigger" if f.severity is Severity.TRIGGER else "guard_notice",
+                           "account": f.account, "code": f.code, "detail": shown(f)})
+                    a.notifier(f"panic: {f.account}", shown(f) + extra)
 
                 def save() -> None:
                     s.update(lambda d: d.__setitem__("guard", state))
 
-                def act(targets: list[str], findings: list[Finding]) -> None:
+                def act(targets: list[str], findings: list[Finding]) -> bool:
                     def checkpoint(o: Outcome) -> None:  # survives a process that dies mid-press
                         o.triggers = [f"{f.code}: {shown(f)}" for f in findings]
                         _save_outcome(s, o)
@@ -80,27 +71,29 @@ def cmd_guard(a) -> int:
                                     and st.action not in CONTAIN_SKIP]
                             if not plan:
                                 print(f"Guard: nothing to contain for {', '.join(targets)}.")
-                                return
+                                return True
                         else:  # a new press puts lock enforcement back
-                            s.update(lambda d: d.__setitem__("released", sorted(set(d.get("released", [])) - set(targets))))
+                            _guard("clear the released list", lambda: s.update(lambda d: d.__setitem__(
+                                "released", sorted(set(d.get("released", [])) - set(targets)))))
                         out = executor.press(plan, accounts, edges, conns, data["baselines"], lambda step: False, s.log,
                                              progress=_warn, checkpoint=checkpoint)
                         out.triggers = [f"{f.code}: {shown(f)}" for f in findings]
                         _guard("save the outcome to the vault", lambda: _save_outcome(s, out))
                         _publish_report(s, out)
+                        return True
                     except Exception as e:  # the guard outlives a failed press; `pressed` stays set, so no retry loop
                         who = ", ".join(sorted({f.account for f in findings}))
                         msg = f"the automatic press failed for {who}: {e}. Run `panic press` by hand."
-                        s.log({"event": "guard_notice", "account": who, "code": "press_failed", "detail": msg})
                         print(f"Guard: {msg}")
+                        _guard("log the failed press", lambda: s.log(
+                            {"event": "guard_notice", "account": who, "code": "press_failed", "detail": msg}))
+                        a.notifier(f"panic: {who}", msg)
+                        return False
 
                 per_acct = {x.id: conns[x.provider] for x in accounts if x.provider in conns}
                 for line in guard_once(accounts, edges, per_acct, data["baselines"], set(data.get("unguarded", [])),
                                        state, a.on_detect, act, notifier, save, dry_run=a.dry_run):
-                    notified = line.removeprefix("would ").removeprefix("notify ")
-                    acct, _, text = notified.partition(": ")
-                    trigger_line = line != notified and text not in texts and acct in {x.id for x in accounts}
-                    print(line + (also(acct) if trigger_line else ""))
+                    print(line)
                 if not a.dry_run:
                     if state != before:  # guard_once only saves before acting; notices and cursors need it too
                         save()

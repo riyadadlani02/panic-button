@@ -267,8 +267,9 @@ def test_enterprise_events_match_only_this_member_and_use_since():
                             entry("anomaly", actor="U2"), entry("anomaly", entity="U2")]}
     c = conn("enterprise", audit=FakeApi({"/logs": logs}))
     out = c.events(Account(A, "slack"), 1700000000.5)
-    assert len(out) == 1 and out[0].code == "provider_flagged_login" and out[0].severity is Severity.TRIGGER
-    assert out[0].items == ("anomaly", "user_logout_compromised")
+    assert [(f.code, f.severity, f.items) for f in out] == [
+        ("provider_flagged_login", Severity.TRIGGER, ("anomaly",)),
+        ("provider_flagged_login", Severity.TRIGGER, ("user_logout_compromised",))]
     assert seen[0]["action"] == "anomaly,user_logout_compromised" and seen[0]["oldest"] == 1700000000
 
 
@@ -278,6 +279,19 @@ def test_enterprise_events_with_nothing_for_this_member_are_empty_and_follow_pag
     out = conn("enterprise", audit=FakeApi({"/logs": pages})).events(Account(A, "slack"), 0)
     assert len(out) == 1
     assert conn("enterprise", audit=FakeApi({"/logs": {"entries": []}})).events(Account(A, "slack"), 0) == []
+
+
+def test_enterprise_events_carry_a_stable_key():
+    e1 = {**entry("anomaly", actor="U1"), "id": "e-1"}
+    e2 = {**entry("anomaly", actor="U1"), "date_create": 1700000000}
+    out = conn("enterprise", audit=FakeApi({"/logs": {"entries": [e1, e2]}})).events(Account(A, "slack"), 0)
+    assert [f.key for f in out] == ["e-1", "anomaly@1700000000"]
+
+
+def test_access_log_notices_carry_a_stable_key():
+    page = {"ok": True, "logins": [login("U1", "1.1.1.1", 200), login("U1", "1.1.1.1", 300)], "paging": {"pages": 1}}
+    out = conn("pro", web=FakeApi({"/team.accessLogs": page})).events(Account(A, "slack"), 100)
+    assert [f.key for f in out] == ["new_access:1.1.1.1@200"]
 
 
 def test_a_malformed_audit_log_raises():

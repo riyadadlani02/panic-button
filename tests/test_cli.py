@@ -1008,6 +1008,27 @@ def test_a_failed_automatic_press_does_not_kill_the_guard(guard, monkeypatch, ca
     assert "automatic press failed for mail" in out and "kaboom" in out and "panic press" in out
     assert any(e["event"] == "guard_notice" and "kaboom" in e["detail"] for e in log.entries(log_path))
     assert "pressed" in open_vault()["guard"] and open_vault()["guard"]["pressed"]["mail"]
+    assert any("automatic press failed for mail" in n[1] for n in guard.notes)
+    assert "mail: the automatic press failed; run `panic press` by hand" in out
+    assert "already handling" not in out
+
+
+def test_trigger_notification_says_the_guard_is_pressing(guard):
+    trigger("mail")
+    guard.run("--passes", "1")
+    assert "Pressing now." in guard.notes[0][1]
+
+
+def test_an_old_vault_guard_state_loads(armed):
+    d = open_vault()
+    d["guard"] = {"seen": ["mail|rule_hides_mail|rule-json"], "cursors": {}, "pressed": {}}
+    vault.save(vpath, d, PW, kpath.read_bytes())
+    trigger("bank")
+    g = Guard()
+    assert g.run("--on-detect", "alert", "--passes", "1") == 0
+    state = open_vault()["guard"]
+    assert isinstance(state["seen"], dict) and state["events_seen"] == {} and "unguarded" not in open_vault()
+    assert [n[0] for n in g.notes] == ["panic: bank"]
 
 
 def test_release_leaves_the_account_unguarded_until_rehearse_resumes_it(armed):

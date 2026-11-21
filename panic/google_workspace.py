@@ -154,10 +154,13 @@ class Workspace:
         while True:
             r = self._call(self._svc("reports", self.admin).activities().list(**kw)) or {}
             for act in r.get("items", []):
+                ident = act.get("id") or {}
                 for e in act.get("events", []):
                     if e.get("name") in SUSPICIOUS:
+                        uq, when = ident.get("uniqueQualifier"), ident.get("time")
+                        key = f"{uq}:{e['name']}" if uq else f"{e['name']}@{when}" if when else ""
                         out.append(Finding(account.id, "provider_flagged_login", Severity.TRIGGER,
-                                           TEXT["provider_flagged_login"], (e["name"],)))
+                                           TEXT["provider_flagged_login"], (e["name"],), key))
             if not r.get("nextPageToken"):
                 return out
             kw["pageToken"] = r["nextPageToken"]
