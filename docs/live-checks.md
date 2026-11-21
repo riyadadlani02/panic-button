@@ -18,6 +18,13 @@ Press, watch and rehearse have run on a real throwaway account. The guard has no
 
 Known delay: a filter created in the web page can take over a minute to reach the API. If check 3 or 5 sees nothing within one interval, wait a minute before calling it a failure.
 
+Results on the throwaway account (21 November 2026):
+
+- Checks 1 and 2 passed as written.
+- Check 5 passed in its main part: with `panic guard --interval 30` running, a hiding filter (subject "security alert", mark as read, delete) added in the browser was noticed on the next pass, about 15 seconds later, the notification said "Pressing now", the filter was deleted and read back as Verified, the seven guided steps were listed under "Needs you" with nobody asked, and the report had a "What triggered this press" section. Gmail's page showed the filter gone after a reload.
+- A star-only filter added a minute later gave the notice "Something else on this account changed since the baseline" and no press. On the following pass the 24-hour watch from the press removed it ("was changed, put back"). So for 24 hours after a press every new filter is removed, harmless or not; outside that window a harmless filter is only reported.
+- Not run: checks 3 and 4 (`alert` mode), 6 (a second hiding filter inside 24 hours) and 7 (restart).
+
 ## Google Workspace
 
 Never run on a real tenant. Use a test tenant and a test user, and a separate break-glass admin.

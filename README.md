@@ -51,7 +51,7 @@ Read this before relying on a connector. "Tested against recorded response shape
 
 | Connector | Run on a real account |
 |---|---|
-| Personal Gmail | yes: pressed, watched and rehearsed on a real throwaway account. Its guard has not yet run on a real account. |
+| Personal Gmail | yes: pressed, watched and rehearsed on a real throwaway account. The guard ran on it too: a hiding rule added in the browser was noticed within one 30-second interval, pressed with nobody answering, and named in the report; a star-only rule gave a notice and no press. Not yet run there: `alert` and `contain` modes, a restart, and a second hiding rule inside 24 hours. |
 | Google Workspace | no: tested against recorded response shapes only |
 | Microsoft 365 | no: tested against recorded response shapes only |
 | Personal Microsoft (Outlook.com) | no: tested against recorded response shapes only |
