@@ -70,11 +70,16 @@ uv run panic --help
 
 ## Try it without an account
 
+Two demos run the tool with no account and no network. Neither proves that a real provider behaves the same; only the live checks in `docs/live-checks.md` can.
+
 ```
 PYTHONPATH=. uv run python demo/sandbox_demo.py
+PYTHONPATH=. uv run python demo/all_services_demo.py [--json run.json]
 ```
 
-It runs the real vault, engine and `panic` commands against an in-memory mail provider: an attacker adds forwarding, a hiding filter and a rogue app, the press removes them, and the attacker re-adds forwarding during a shortened watch, which puts it back. Then it runs `panic guard` for two passes with no waiting and no desktop notification: the attacker adds forwarding between the passes and the guard presses by itself. Nothing touches the network.
+`sandbox_demo.py` runs the real vault, engine and `panic` commands against a made-up mail provider: an attacker adds forwarding, a hiding filter and a rogue app, the press removes them, the attacker re-adds forwarding during a shortened watch, which puts it back, and then `panic guard` presses by itself when forwarding appears between two passes.
+
+`all_services_demo.py` runs the real connectors (GitHub, Outlook.com, Microsoft 365, Google Workspace, Slack Enterprise Grid, and a guided Amazon account) against simulated providers in `demo/lab.py`: small in-memory stand-ins that answer the calls each connector makes. For each service an intruder changes something between two `panic guard` passes, the guard notices and presses by itself, and the demo prints the account before and after, the guard's notification and what the tool did, as saved in the vault, then checks the stand-in's state. It also shows a GitHub repository rename (a notice, nothing deleted), `panic release` and `panic rehearse` on Microsoft 365, and what Slack's other plans get. It proves the tool's logic against providers that behave as their documentation says, not that the real services do. `--json PATH` also writes a record of the run. Everything is written to a temporary folder and removed at the end.
 
 ## Setup: personal Gmail
 
