@@ -1,7 +1,7 @@
 """Scriptable connector for engine tests."""
 from dataclasses import replace
 
-from panic.model import Account, Snapshot, Step
+from panic.model import Account, Finding, Snapshot, Step
 
 
 class FakeConnector:
@@ -13,6 +13,8 @@ class FakeConnector:
         self.ran: list[str] = []
         self.state: dict[str, bool] = {}
         self.snap: Snapshot = {}
+        self.findings: list[Finding] = []
+        self.event_findings: list[Finding] = []
 
     @staticmethod
     def _key(step: Step) -> str:
@@ -35,3 +37,9 @@ class FakeConnector:
         if step.action in self.no_readback:
             return None
         return self.state.get(self._key(step), False)
+
+    def signals(self, account: Account, snapshot: Snapshot, baseline: Snapshot) -> list[Finding]:
+        return self.findings
+
+    def events(self, account: Account, since: float) -> list[Finding]:
+        return self.event_findings

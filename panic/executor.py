@@ -10,6 +10,8 @@ from panic.model import Account, Edges, Evidence, Outcome, Phase, Result, Snapsh
 
 class Connector(Protocol):
     # run and check are called concurrently from several threads and must be thread-safe.
+    # Optional, looked up with getattr: signals(account, snapshot, baseline) -> list[Finding]
+    # and events(account, since: float) -> list[Finding].
     provider: str
 
     def catalog(self, account: Account) -> list[Step]: ...  # no network; order = guided presentation order

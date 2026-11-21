@@ -31,6 +31,20 @@ class WatchPolicy(StrEnum):
     NONE = "none"
 
 
+class Severity(StrEnum):
+    TRIGGER = "trigger"
+    NOTICE = "notice"
+
+
+@dataclass(frozen=True)
+class Finding:
+    account: str
+    code: str
+    severity: Severity
+    text: str
+    items: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class Account:
     id: str
