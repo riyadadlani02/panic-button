@@ -2,16 +2,20 @@
 import json
 from urllib.parse import quote
 
-from panic.http import Api
+from panic.http import Api, ApiError
 
 
 def pages(api: Api, path: str, params: dict | None = None) -> list:
     """Every item of a Graph collection; Api.pages only knows GitHub's Link headers."""
     out, seen = [], set()
-    while path and path not in seen:  # a server that loops its own nextLink must not loop us
+    while path:
+        if path in seen:  # a looping nextLink would hand back a partial list as if complete
+            raise ApiError(200, "", "nextLink loops")
         seen.add(path)
-        page = api.get(path, params) or {}
-        out += page.get("value", [])
+        page = api.get(path, params)
+        if not isinstance(page, dict) or not isinstance(page.get("value"), list):
+            raise ApiError(200, "", "expected a collection")  # a malformed page is never "no items"
+        out += page["value"]
         path, params = page.get("@odata.nextLink"), None  # the next link already carries the query
     return out
 

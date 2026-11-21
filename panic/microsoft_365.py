@@ -58,6 +58,7 @@ class Microsoft365:
 
     def __init__(self, cred: dict, api: Api | None = None, token: Callable[[], str] | None = None):
         self.admin, self._domains = cred["admin"], {d.casefold() for d in cred.get("domains", [])}
+        self._oids: dict[str, str] = {}
         token = token or _msal_token(cred)
         self._api = api or Api(BASE, lambda: {"Authorization": f"Bearer {token()}"})
 
@@ -80,9 +81,20 @@ class Microsoft365:
         return [Step(account.id, a, ph, t, title, link, w, ling, ar) for a, ph, t, w, ling, ar, link, title in _CATALOG]
 
     # -- reads ---------------------------------------------------------
+    def _oid(self, acct: str) -> str:
+        if acct not in self._oids:
+            oid = (self._api.get(self._u(acct), {"$select": "id"}) or {}).get("id")
+            if not oid:
+                raise ValueError(f"could not find the object id of {acct}")
+            self._oids[acct] = oid
+        return self._oids[acct]
+
     def _grants(self, acct: str) -> list[tuple[str, str]]:
+        # Only the user's own grants: a tenant-wide grant (AllPrincipals) belongs to every user and is never touched.
+        oid = self._oid(acct)
         return [(g["id"], _j(clientId=g.get("clientId"), scope=g.get("scope")))
-                for g in graph_mail.pages(self._api, f"{self._u(acct)}/oauth2PermissionGrants")]
+                for g in graph_mail.pages(self._api, f"{self._u(acct)}/oauth2PermissionGrants")
+                if g.get("consentType") == "Principal" and g.get("principalId") == oid]
 
     def snapshot(self, account: Account) -> Snapshot:
         a = account.id

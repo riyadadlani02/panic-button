@@ -101,3 +101,10 @@ def test_hiding_rules():
         assert rule_code(canon(rule(actions=actions)), set()) == "rule_hides_mail"
     assert rule_code(canon(rule(actions={"moveToFolder": "f"})), set()) is None
     assert rule_code("not json", set()) == "rule_hides_mail"
+
+
+def test_repeated_next_link_raises():
+    nxt = "https://graph.microsoft.com/v1.0/users?$skiptoken=x"
+    api = FakeApi({"/users": {"value": [1], "@odata.nextLink": nxt}, nxt: {"value": [2], "@odata.nextLink": nxt}})
+    with pytest.raises(ApiError):
+        pages(api, "/users")

@@ -47,13 +47,17 @@ def test_sign_out_has_no_readback():
     assert api.sent == [("POST", f"/users/{A}/revokeSignInSessions", None)] and c.check(step("sign_out"), {}) is None
 
 
-def grant(i, scope, client="app"):
-    return {"id": i, "clientId": client, "scope": scope}
+def grant(i, scope, client="app", kind="Principal", principal="uid-a"):
+    return {"id": i, "clientId": client, "scope": scope, "consentType": kind, "principalId": principal}
+
+
+def with_user(data):
+    return {f"/users/{A}": {"id": "uid-a"}, **data}
 
 
 def test_consent_grants_deletion_keeps_baseline():
     keep, bad = grant("1", "User.Read", "ok"), grant("2", "Mail.Read", "evil")
-    api = FakeApi({GRANTS: {"value": [keep, bad]}})
+    api = FakeApi(with_user({GRANTS: {"value": [keep, bad]}}))
     c = conn(api)
     base = {"consent_grants": [json.dumps({"clientId": "ok", "scope": "User.Read"}, sort_keys=True)]}
     assert c.check(step("consent_grants"), base) is False
@@ -78,7 +82,7 @@ def test_read_only_rule_fails_the_step():
 
 @pytest.mark.parametrize("action,path", [("inbox_rules", INBOX), ("consent_grants", GRANTS)])
 def test_missing_baseline_category_fails_closed(action, path):
-    api = FakeApi({path: {"value": [rule("1")]}})
+    api = FakeApi(with_user({path: {"value": [rule("1")]}}))
     for call in (lambda c: c.run(step(action), {}), lambda c: c.check(step(action), {})):
         with pytest.raises(KeyError, match=f"no baseline recorded for {action} on {A}"):
             call(conn(api))
@@ -112,7 +116,7 @@ def test_release_reenables_and_says_to_reset_the_password():
 
 def test_snapshot_reads_the_three_categories():
     r = rule("1", "r")
-    api = FakeApi({INBOX: {"value": [r]}, GRANTS: {"value": [grant("1", "User.Read", "app")]},
+    api = FakeApi({INBOX: {"value": [r]}, GRANTS: {"value": [grant("1", "User.Read", "app")]}, f"/users/{A}": {"id": "uid-a"},
                    f"/users/{A}/authentication/methods": {"value": [
                        {"@odata.type": "#microsoft.graph.phoneAuthenticationMethod", "id": "m1"}]}})
     s = conn(api).snapshot(Account(A, "microsoft_365"))
@@ -172,3 +176,22 @@ def test_secret_is_not_in_any_exception_message():
     with pytest.raises(RuntimeError) as e:
         c._api.get("/users")
     assert "SECRET-VALUE" not in str(e.value)
+
+
+def test_only_the_users_own_consent_grants_are_read_and_deleted():
+    own = grant("1", "Mail.Read", "mine")
+    rows = [own, grant("2", "Mail.Read", "other", principal="uid-b"), grant("3", "Mail.Read", "wide", "AllPrincipals", None)]
+    api = FakeApi(with_user({GRANTS: {"value": rows}}))
+    c = conn(api)
+    api.data.update({INBOX: {"value": []}, f"/users/{A}/authentication/methods": {"value": []}})
+    snap = c.snapshot(Account(A, "microsoft_365"))
+    assert snap["consent_grants"] == [json.dumps({"clientId": "mine", "scope": "Mail.Read"}, sort_keys=True)]
+    c.run(step("consent_grants"), {"consent_grants": []})
+    assert api.deleted == ["/oauth2PermissionGrants/1"]
+
+
+def test_malformed_page_makes_check_raise():
+    for bad in ({}, None):
+        api = FakeApi({INBOX: bad})
+        with pytest.raises(ApiError):
+            conn(api).check(step("inbox_rules"), {"inbox_rules": []})
