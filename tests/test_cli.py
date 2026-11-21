@@ -1007,3 +1007,20 @@ def test_rehearse_approval_removes_the_account_from_released(armed):
     fake.snap = {"filters": ["x"]}
     cli("rehearse", answers=["y", "n"])
     assert open_vault()["released"] == []
+
+
+def test_a_failed_pass_is_reported_and_the_guard_carries_on(guard, monkeypatch, capsys):
+    trigger("mail")
+    real, calls = vault.save, []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("disk full")
+        return real(*a, **k)
+
+    monkeypatch.setattr("panic.vault.save", flaky)
+    assert guard.run("--passes", "2") == 0
+    assert "OSError: disk full" in capsys.readouterr().out and any("still running" in n[1] for n in guard.notes)
+    assert any(e.get("code") == "pass_failed" for e in log.entries(log_path))
+    assert len(open_vault()["outcomes"]) == 1  # the next pass pressed once
