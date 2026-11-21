@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -7,6 +8,13 @@ from panic.http import ApiError
 from panic.model import Account, Phase, Severity, Tier, WatchPolicy
 
 ME, ORG = Account("me", "github"), Account("org:acme", "github")
+
+
+def hook(url, events, **kw):
+    fp = hashlib.sha256(url.encode()).hexdigest()[:12]
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    return item(url=f"{u.scheme}://{u.hostname}{u.path}", fingerprint=fp, events=sorted(events), **kw)
 
 
 def item(**kw):
@@ -79,7 +87,7 @@ def test_personal_snapshot_shape_and_canonical_items():
     assert snap["ssh_keys"][0] == item(key="K1", title="laptop")
     assert snap["emails"] == [item(email="me@x.test"), item(email="evil@x.test")]
     assert snap["deploy_keys"][0] == item(key="D1", title="deploy", repo="me/r")
-    assert snap["webhooks"] == [item(url="https://h.test/x", events=["fork", "push"], repo="me/r")]
+    assert snap["webhooks"] == [hook("https://h.test/x", ["push", "fork"], repo="me/r")]
     assert snap["collaborators"] == [item(login="bob", repo="me/r")]  # the owner is not a collaborator
     assert snap["invitations"] == [item(login="carol", repo="me/r", permissions="write")]
     assert not any('"id"' in i for items in snap.values() for i in items)
@@ -91,7 +99,7 @@ def test_org_snapshot_shape():
                    "/orgs/acme/repos": [{"full_name": "acme/r"}],
                    "/repos/acme/r/keys": [{"id": 2, "key": "D", "title": "t"}]})
     snap = gh(api).snapshot(ORG)
-    assert snap == {"org_webhooks": [item(url="https://h.test", events=["push"])],
+    assert snap == {"org_webhooks": [hook("https://h.test", ["push"])],
                     "outside_collaborators": [item(login="bob")],
                     "deploy_keys": [item(key="D", title="t", repo="acme/r")]}
 
@@ -233,3 +241,26 @@ def test_login_and_org_admin():
 def test_no_token_for_the_account_is_a_key_error():
     with pytest.raises(KeyError, match="no token for account me"):
         gh(FakeApi(), tokens={}).snapshot(ME)
+
+
+SECRET_HOOK = "https://user:pw@hooks.example.test/x?token=SECRET"
+
+
+def test_webhook_item_never_holds_the_secret_but_tells_tokens_apart():
+    api = personal_api()
+    api.lists["/repos/me/r/hooks"] = [{"id": 1, "config": {"url": SECRET_HOOK}, "events": ["push"]},
+                                      {"id": 2, "config": {"url": SECRET_HOOK.replace("SECRET", "OTHER")}, "events": ["push"]}]
+    a, b = gh(api).snapshot(ME)["webhooks"]
+    assert "SECRET" not in a and "pw" not in a and "OTHER" not in b and "user" not in a
+    assert json.loads(a)["url"] == "https://hooks.example.test/x" and a != b
+
+
+def test_baseline_webhook_survives_run_and_same_path_other_token_is_deleted():
+    api = personal_api()
+    api.lists["/repos/me/r/hooks"] = [{"id": 1, "config": {"url": SECRET_HOOK}, "events": ["push"]}]
+    c = gh(api)
+    base = c.snapshot(ME)
+    api.lists["/repos/me/r/hooks"].append({"id": 2, "config": {"url": SECRET_HOOK.replace("SECRET", "NEW")},
+                                           "events": ["push"]})
+    c.run(step(c, "repo_access"), base)
+    assert api.deleted == ["/repos/me/r/hooks/2"]

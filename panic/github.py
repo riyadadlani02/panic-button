@@ -1,9 +1,10 @@
 """Connector for a GitHub user account or organisation, over the REST API with a fine-grained token."""
+import hashlib
 import json
 import threading
 import time
 from collections.abc import Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from panic.http import Api, ApiError
 from panic.model import Account, Finding, Phase, Snapshot, Step, Tier, WatchPolicy
@@ -48,6 +49,18 @@ def _j(**fields) -> str:
     return json.dumps(fields, sort_keys=True)
 
 
+def _hook_item(h: dict, **extra) -> str:
+    # Hook URLs often carry a secret: keep scheme://host/path and a fingerprint of the whole URL, never the secret.
+    url = h["config"].get("url", "")
+    try:
+        u = urlsplit(url)
+        host = u.hostname and (f"{u.hostname}:{u.port}" if u.port else u.hostname)
+        plain = f"{u.scheme}://{host}{u.path}" if host else ""
+    except ValueError:
+        plain = ""
+    return _j(url=plain, fingerprint=hashlib.sha256(url.encode()).hexdigest()[:12], events=sorted(h["events"]), **extra)
+
+
 def _read_list(api: Api, path: str, make, params: dict | None = None) -> list[tuple[str, tuple | None]]:
     return [make(x) for x in api.pages(path, params)]
 
@@ -69,8 +82,7 @@ def _emails(api, _):
 
 
 def _hooks(path):
-    return lambda api, _: _read_list(api, path, lambda h: (_j(url=h["config"].get("url", ""), events=sorted(h["events"])),
-                                                           (f"{path}/{h['id']}", None)))
+    return lambda api, _: _read_list(api, path, lambda h: (_hook_item(h), (f"{path}/{h['id']}", None)))
 
 
 def _outside(api, org):
@@ -92,7 +104,7 @@ def _repo_deploy_keys(api, repo):
 
 def _repo_webhooks(api, repo):
     return _read_list(api, f"/repos/{repo}/hooks", lambda h: (
-        _j(url=h["config"].get("url", ""), events=sorted(h["events"]), repo=repo), (f"/repos/{repo}/hooks/{h['id']}", None)))
+        _hook_item(h, repo=repo), (f"/repos/{repo}/hooks/{h['id']}", None)))
 
 
 def _repo_collaborators(api, repo):
