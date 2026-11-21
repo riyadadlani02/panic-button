@@ -66,3 +66,9 @@ def test_real_press_and_dry_run_cover_guided_accounts(armed, capsys):
     assert g and all(r["status"] == "needs_you" for r in g)
     text = latest_report().read_text()
     assert "## Needs you" in text and "Amazon: " in text.split("## Needs you")[1]
+
+
+def test_arm_refuses_a_guided_key_with_a_colon_or_space(armed, capsys):
+    for key in ("my:shop", "my shop"):
+        assert cli("arm", "--guided", key, "--id", "me", "--link", "password=https://x.test/p", answers=["y", ""]) == 1
+    assert not any(a["provider"] == "guided" for a in open_vault()["accounts"])

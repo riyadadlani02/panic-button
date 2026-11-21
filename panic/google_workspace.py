@@ -27,8 +27,10 @@ from panic.signals import TEXT, drift, gmail_rule_code
 _AUTH = "https://www.googleapis.com/auth/"
 # Settings and directory only: none of these can read mail content.
 SCOPES = [_AUTH + s for s in ("admin.directory.user", "admin.directory.user.security",
-                              "gmail.settings.basic", "gmail.settings.sharing",
-                              "admin.reports.audit.readonly")]
+                              "gmail.settings.basic", "gmail.settings.sharing")]
+# Asked for by the reports service alone: delegation refuses a token if any requested scope is not authorised,
+# so a tenant without it must still be able to press.
+REPORTS_SCOPES = [_AUTH + "admin.reports.audit.readonly"]
 SUSPICIOUS = {"suspicious_login", "suspicious_login_less_secure_app", "suspicious_programmatic_login",
               "account_disabled_hijacked"}
 
@@ -64,7 +66,8 @@ class Workspace:
     def _svc(self, api: str, subject: str):
         cache = self._local.__dict__.setdefault("svcs", {})
         if (api, subject) not in cache:
-            creds = service_account.Credentials.from_service_account_info(self._sa, scopes=SCOPES, subject=subject)
+            scopes = REPORTS_SCOPES if api == "reports" else SCOPES
+            creds = service_account.Credentials.from_service_account_info(self._sa, scopes=scopes, subject=subject)
             name, version = {"admin": ("admin", "directory_v1"), "reports": ("admin", "reports_v1")}.get(api, ("gmail", "v1"))
             cache[(api, subject)] = self._build(name, version, credentials=creds, cache_discovery=False)
         return cache[(api, subject)]

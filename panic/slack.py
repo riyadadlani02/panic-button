@@ -49,6 +49,11 @@ def _cursor_pages(fetch: Callable[[dict], dict], key: str, what: str) -> list:
         seen.add(cursor)
 
 
+def _address(account_id: str) -> str:
+    """Account ids are "slack:<email>"; Slack itself knows the member by email."""
+    return account_id.removeprefix("slack:").casefold()
+
+
 def _user_id(entry, field: str) -> str | None:
     side = entry.get(field) if isinstance(entry, dict) else None
     user = side.get("user") if isinstance(side, dict) else None
@@ -133,7 +138,7 @@ class Slack:
         return list(self._users)
 
     def _id(self, acct: str) -> str:
-        key = acct.casefold()
+        key = _address(acct)
         if key not in self._users:  # joined after arming
             self._users = {**self._users, **self.members()}
         if key not in self._users:
@@ -200,7 +205,7 @@ class Slack:
 
     # -- writes --------------------------------------------------------
     def _refuse_owner(self, account_id: str) -> None:
-        if account_id.casefold() == self.owner.casefold():
+        if _address(account_id) == self.owner.casefold():
             raise ValueError(f"refusing to act on the primary owner {account_id}")
 
     def _set_active(self, acct: str, active: bool) -> None:

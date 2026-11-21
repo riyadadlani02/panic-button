@@ -183,8 +183,9 @@ def test_users_pages_through_the_tenant(conn, directory):
 
 
 def test_scopes_cannot_read_mail():
-    assert not any(s.endswith(("gmail.readonly", "gmail.modify", "mail.google.com/")) for s in google_workspace.SCOPES)
-    assert len(google_workspace.SCOPES) == 5
+    every = google_workspace.SCOPES + google_workspace.REPORTS_SCOPES
+    assert not any(s.endswith(("gmail.readonly", "gmail.modify", "mail.google.com/")) for s in every)
+    assert len(google_workspace.SCOPES) == 4
 
 
 def test_admin_guard_ignores_case(conn, directory, gmail):
@@ -282,5 +283,14 @@ def test_signals_and_events_refuse_the_admin(conn):
         conn.events(admin, 0.0)
 
 
-def test_reports_scope_is_requested():
-    assert google_workspace.SCOPES[-1].endswith("admin.reports.audit.readonly")
+def test_only_the_reports_service_asks_for_the_reports_scope(sa_info):
+    scopes = {}
+
+    def build(name, version, credentials, **kw):
+        scopes[version] = list(credentials._scopes)
+        return MagicMock()
+    ws = Workspace(sa_info, ADMIN, "corp.test", build=build)
+    ws._dir(), ws._gmail(ACCT.id), ws._svc("reports", ADMIN)
+    reports = "https://www.googleapis.com/auth/admin.reports.audit.readonly"
+    assert scopes["directory_v1"] == scopes["v1"] == google_workspace.SCOPES and reports not in scopes["v1"]
+    assert scopes["reports_v1"] == [reports]

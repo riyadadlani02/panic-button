@@ -5,7 +5,8 @@ from panic.model import Account, Phase, Severity, Step, Tier, WatchPolicy
 from panic.slack import Slack
 
 OWNER = "Owner@corp.test"
-A = "a@corp.test"
+EMAIL = "a@corp.test"
+A = "slack:" + EMAIL  # account ids carry the provider; the users map is keyed by email
 
 
 class FakeApi:
@@ -33,7 +34,7 @@ class FakeApi:
 
 
 def cred(plan="business", **kw):
-    return {"token": "xoxp-SECRET", "plan": plan, "team": "acme", "users": {A: "U1", OWNER.lower(): "U0"},
+    return {"token": "xoxp-SECRET", "plan": plan, "team": "acme", "users": {EMAIL: "U1", OWNER.lower(): "U0"},
             "primary_owner": OWNER.lower(), **kw}
 
 
@@ -204,7 +205,7 @@ def test_ratelimited_read_makes_run_raise_without_a_scim_write():
 def test_a_member_who_joined_after_arming_is_found():
     web = FakeApi({"/users.list": {"ok": True, "members": [user("U9", "new@corp.test")]}})
     scim = FakeApi()
-    conn("business", web=web, scim=scim).run(step("deactivate", "New@corp.test"), {})
+    conn("business", web=web, scim=scim).run(step("deactivate", "slack:New@corp.test"), {})
     assert scim.sent == [("PATCH", "/Users/U9", {"active": False})]
 
 
@@ -214,11 +215,11 @@ def test_primary_owner_is_refused_whatever_the_case(who):
     c = conn("enterprise", web=web, scim=scim)
     for act in ("deactivate", "reset_sessions"):
         with pytest.raises(ValueError):
-            c.run(step(act, who), {})
+            c.run(step(act, "slack:" + who), {})
     with pytest.raises(ValueError):
-        c.release(Account(who, "slack"))
+        c.release(Account("slack:" + who, "slack"))
     with pytest.raises(ValueError):
-        c.events(Account(who, "slack"), 0)
+        c.events(Account("slack:" + who, "slack"), 0)
     assert scim.sent == web.sent == []
 
 

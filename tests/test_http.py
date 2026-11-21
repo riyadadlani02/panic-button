@@ -135,3 +135,9 @@ def test_send_posts_json_and_empty_body_is_none():
     r = s.requests[0]
     assert r.get_method() == "POST" and r.data == b'{"a": 1}' and r.get_header("Content-type") == "application/json"
     assert s.requests[1].data is None
+
+
+@pytest.mark.parametrize("value, wait", [("3600", 60.0), ("-5", 0.0), ("soon", 1), ("nan", 0.0)])
+def test_retry_after_is_clamped_and_never_raises(value, wait):
+    a, s, sleeps = api(err(429, headers={"Retry-After": value}), Resp(b'{"ok": true}'))
+    assert a.get("/x") == {"ok": True} and sleeps == [wait]

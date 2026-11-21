@@ -90,7 +90,7 @@ def demo():
         print(f"\n$ panic {' '.join(args)}")
         return main(["--vault", str(vpath), "--keyfile", str(kpath), *args], connectors={"sim": sim}, **kw)
 
-    say("1. Arm: record each account's known-good settings (written straight to the vault; `panic arm` itself is Google-only)")
+    say("1. Arm: record each account's known-good settings (written straight to the vault; this simulated provider has no `panic arm` form)")
     key = vault.new_keyfile()
     kpath.write_bytes(key)
     vault.save(vpath, {

@@ -292,7 +292,8 @@ def _parser() -> argparse.ArgumentParser:
     g.add_argument("--dry-run", action="store_true", help="read and report; notify, press and save nothing")
     g.add_argument("--passes", type=int, default=0, help=argparse.SUPPRESS)
     add("watch", cmd_watch, "Resume the 24-hour watch after a press.")
-    rel = add("release", cmd_release, "Unsuspend one account with a temporary password.")
+    rel = add("release", cmd_release, "Lift the lock on one organisation account: Workspace unsuspends it with a "
+              "temporary password, Microsoft 365 re-enables sign-in, Slack reactivates the member.")
     rel.add_argument("--user", required=True, metavar="ID")
     add("report", cmd_report, "Show the report from the last press at the current time.")
     rem = add("removed", cmd_removed, "Print everything the last press removed from one account, unredacted.")

@@ -4,10 +4,11 @@ from pathlib import Path
 
 from panic import executor, google_personal, microsoft_personal
 from panic.model import Account, Step
-from panic.session import RULE_CATEGORIES, YES, CliError, Session, _connectors, _redact, _unprotected, _upsert, _warn, _yes
+from panic.session import ORG_PROVIDERS, RULE_CATEGORIES, YES, CliError, Session, _connectors, _redact, _unprotected, _upsert, _warn, _yes
 
-# Workspace rehearsal shows these as flags only; their contents are never printed.
-WORKSPACE_FLAGS = ("forwarding", "forwarding_addresses", "delegates", "recovery", "consent_grants", "auth_methods")
+# Organisation rehearsal shows these as flags only; their contents are never printed.
+WORKSPACE_FLAGS = ("forwarding", "forwarding_addresses", "delegates", "recovery", "consent_grants", "auth_methods",
+                   "active")
 
 
 def _plan_lines(plan: list[Step]) -> list[str]:
@@ -195,8 +196,11 @@ def _arm_microsoft(a) -> int:
                     lambda ms: {**cred, "domains": ms.domains()})
 
 
-def _arm_org(a, provider: str, label: str, admin: str, connect, credential) -> int:
-    """Arms every user of an organisation tenant and protects its admin; baselines are only ever added."""
+def _arm_org(a, provider: str, label: str, admin: str, connect, credential, prefix: str = "") -> int:
+    """Arms every user of an organisation tenant and protects its admin; baselines are only ever added.
+
+    `prefix` keeps a provider's ids apart from a mail tenant's on the same addresses."""
+    admin = prefix + admin
     s = Session(a, create=True)
     prior = {x.id: x for x in s.accounts}
     if admin in prior and prior[admin].provider != provider:
@@ -207,7 +211,7 @@ def _arm_org(a, provider: str, label: str, admin: str, connect, credential) -> i
     except Exception as e:
         raise CliError(f"refusing to arm: {e}")
     try:
-        users = list(dict.fromkeys([u.lower() for u in ws.users()] + [admin]))
+        users = list(dict.fromkeys([prefix + u.lower() for u in ws.users()] + [admin]))
     except Exception as e:
         raise CliError(f"could not list the {label} users: {e}")
     try:
@@ -269,6 +273,8 @@ def _arm_guided(a) -> int:
     if not a.id:
         raise CliError("--guided needs --id LOGIN.")
     key, links = a.guided.lower(), {}
+    if not key or ":" in key or any(c.isspace() for c in key):  # the account id is "<key>:<login>"
+        raise CliError(f"refusing guided key {key!r}: it must not contain ':' or spaces.")
     for item in a.link:
         kind, _, url = item.partition("=")
         if kind not in {k for k, _, _ in KINDS}:
@@ -322,7 +328,7 @@ def _arm_slack(a) -> int:
     except Exception as e:
         raise CliError(f"could not read the Slack workspace or detect its plan: {e}")
     cred = {"token": token, "plan": plan, "team": team, "users": users, "primary_owner": owner}
-    rc = _arm_org(a, "slack", "Slack", owner, lambda: Slack(cred), lambda ws: cred)
+    rc = _arm_org(a, "slack", "Slack", owner, lambda: Slack(cred), lambda ws: cred, prefix="slack:")
     if rc == 0:
         print(f"Slack plan: {plan}. This tool {ALLOWS[plan]}.")
     return rc
@@ -420,7 +426,7 @@ def cmd_rehearse(a) -> int:
             bad = True
             continue
         out = executor.outside_baseline(base.get(acct.id, {}), snap)
-        if acct.provider in ("google_workspace", "microsoft_365"):
+        if acct.provider in ORG_PROVIDERS:
             flags = sorted({o.split(":", 1)[0] for o in out} & set(WORKSPACE_FLAGS))
             flags += [i for i in _redact({acct.id: out}, [acct])[acct.id] if i.startswith(RULE_CATEGORIES)]
             print(f"{acct.id}: " + ("changed since baseline: " + ", ".join(flags) if flags else "no flagged changes"))

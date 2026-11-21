@@ -74,8 +74,8 @@ class Api:
                     raise ApiError(status, "", f"{where}: too many redirects")
                 continue
             if (status == 429 or status >= 500) and tries < RETRIES:
-                try:
-                    wait = float(hdrs.get("Retry-After"))
+                try:  # 0..60 s: a hostile or odd header must neither stall the guard nor raise
+                    wait = max(0.0, min(float(hdrs.get("Retry-After")), 60.0))
                 except (TypeError, ValueError):
                     wait = 2 ** tries
                 tries += 1
