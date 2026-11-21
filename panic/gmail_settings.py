@@ -48,16 +48,17 @@ def forwarding_addresses(svc) -> list[str]:
     return [a["forwardingEmail"] for a in r.get("forwardingAddresses", [])]
 
 
-def imap_pop(svc) -> list[str]:
+def imap_pop(svc, imap: bool = True) -> list[str]:
     on = []
     # Fail closed: a missing field must not read as "off".
-    if _s(svc).getImap(userId="me").execute()["enabled"]:
+    if imap and _s(svc).getImap(userId="me").execute()["enabled"]:
         on.append("imap")
     if _s(svc).getPop(userId="me").execute()["accessWindow"] != "disabled":
         on.append("pop")
     return on
 
 
-def disable_imap_pop(svc) -> None:
-    _s(svc).updateImap(userId="me", body={"enabled": False}).execute()
+def disable_imap_pop(svc, imap: bool = True) -> None:
+    if imap:
+        _s(svc).updateImap(userId="me", body={"enabled": False}).execute()
     _s(svc).updatePop(userId="me", body={"accessWindow": "disabled"}).execute()

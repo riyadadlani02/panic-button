@@ -6,7 +6,7 @@ One command that stops an attacker in your connected accounts, root account firs
 
 1. Everything a provider lets software revoke is revoked and then read back to prove it, root account first. Some steps have no read-back: on Workspace, sign-out, backup codes and the password reset; on a personal account, most guided steps. Those are never called verified: the report marks them "Accepted by provider" or "Owner confirmed".
 2. Anything that cannot be revoked is listed by name with when it expires. Unknown counts as open; the report never says "safe" by default.
-3. For 24 hours afterwards, while `panic press` or `panic watch` keeps running, the tool re-checks the settings the API can read and puts back those it can change (filters and IMAP/POP; for Workspace also suspension, forwarding, delegates and recovery details). Other changes are reported, not undone.
+3. For 24 hours afterwards, while `panic press` or `panic watch` keeps running, the tool re-checks the settings the API can read and puts back those it can change (filters and POP, plus IMAP on Workspace; for Workspace also suspension, forwarding, delegates and recovery details). Other changes are reported, not undone.
 4. The tool itself is not a master key: a stolen laptop or a stolen vault file opens nothing, because opening needs both your passphrase and a separate key file.
 5. A lockdown never costs you your account: for personal accounts arming asks you to confirm a recovery path you control; Workspace relies on the named break-glass admin, which no command will act on. No password is changed by API in personal mode.
 
@@ -20,7 +20,7 @@ It suspends the account, resets the password to a random value nobody is told, r
 - A compromised pressing device defeats the tool. Press from a clean device.
 - Personal Gmail has no API for sign-out, connected apps, forwarding or password change, so those are guided steps you confirm by hand.
 - The Workspace connector has been tested against mocked responses only.
-- The nine personal-account guided links are unverified until the live check.
+- Personal Gmail has no IMAP switch: IMAP is always on. A mail client an attacker connected is cut off only by deleting app passwords, removing connected apps and changing the password, which are guided steps.
 - The watch stops when the process stops.
 - The watch does not retry steps that were Still open at press time. Press again.
 - Whether Gmail settings can be changed for a suspended Workspace user is unverified; it is the first item of the live check.
@@ -56,7 +56,7 @@ It runs the real vault, engine and `panic` commands against an in-memory mail pr
 uv run panic --keyfile ~/panic.key arm --personal you@gmail.com --client-secrets client.json
 ```
 
-Sign in as that same address; if Google's chooser signs you in as another account, nothing is stored. The tool asks for a passphrase, creates the vault and the key file, shows you the account's current filters, forwarding and IMAP/POP state, and asks you to approve that as the baseline. Then it asks which of your other armed accounts can reset this one.
+Sign in as that same address; if Google's chooser signs you in as another account, nothing is stored. The tool asks for a passphrase, creates the vault and the key file, shows you the account's current filters, forwarding and POP state, and asks you to approve that as the baseline. Then it asks which of your other armed accounts can reset this one.
 
 Changing your password is the last step for each account, and it disconnects the tool. Straight after, run:
 

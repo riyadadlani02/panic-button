@@ -54,7 +54,7 @@ def test_guided_steps_never_call_the_api():
 
 
 def test_readbacks():
-    conn, _ = make(fwd={"enabled": True, "emailAddress": "x@y"}, imap=True)
+    conn, _ = make(fwd={"enabled": True, "emailAddress": "x@y"}, pop="allMail")
     assert conn.check(step(conn, "forwarding_off"), {"forwarding_addresses": []}) is False
     assert conn.check(step(conn, "imap_pop"), {}) is False
     assert conn.check(step(conn, "sign_out"), {}) is None
@@ -66,7 +66,7 @@ def test_filters_check_and_imap_run():
     assert conn.check(step(conn, "filters"), {"filters": [json.dumps({"criteria": {"x": 1}, "action": {}}, sort_keys=True)]}) is True
     conn.run(step(conn, "imap_pop"), {})
     st = svc.users().settings()
-    st.updateImap.assert_called_with(userId="me", body={"enabled": False})
+    st.updateImap.assert_not_called()  # personal Gmail has no IMAP switch
     st.updatePop.assert_called_with(userId="me", body={"accessWindow": "disabled"})
 
 
@@ -116,9 +116,17 @@ def test_reordered_label_lists_are_the_same_filter():
 
 def test_incomplete_imap_pop_response_fails_closed():
     conn, svc = make()
-    svc.users().settings().getImap().execute.return_value = {}
+    svc.users().settings().getPop().execute.return_value = {}
     with pytest.raises(KeyError):
         conn.check(step(conn, "imap_pop"), {})
+
+
+def test_imap_flag_is_ignored_and_links_name_the_account():
+    conn, _ = make(imap=True)
+    assert conn.snapshot(ACCT)["imap_pop"] == []
+    assert conn.check(step(conn, "imap_pop"), {}) is True
+    links = [s.link for s in conn.catalog(ACCT) if s.link]
+    assert len(links) == 7 and all(f"authuser={ACCT.id}" in link for link in links)
 
 
 def test_filter_delete_404_is_not_an_error():

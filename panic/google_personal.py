@@ -1,5 +1,6 @@
 """Connector for an individual's own Gmail account."""
 import threading
+from urllib.parse import quote
 
 import googleapiclient.discovery
 from google.oauth2.credentials import Credentials
@@ -15,27 +16,29 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.settings.basic"]
 F, P, A, G = Phase.FREEZE, Phase.PURGE, Tier.API, Tier.GUIDED
 R, REP, N = WatchPolicy.REAPPLY, WatchPolicy.REPORT, WatchPolicy.NONE
 # (action, phase, tier, watch, lingers_s, link, title)
+# Links carry the account: with several Google accounts signed in, a bare link opens the first one.
+# Personal Gmail has no IMAP switch (IMAP is always on), so only POP is read and turned off.
 _CATALOG = [
-    ("imap_pop", F, A, R, 0, None, "Turn off IMAP and POP access"),
-    ("forwarding_off", F, G, REP, 0, "https://mail.google.com/mail/u/0/#settings/fwdandpop",
+    ("imap_pop", F, A, R, 0, None, "Turn off POP access"),
+    ("forwarding_off", F, G, REP, 0, "https://mail.google.com/mail/?authuser={email}#settings/fwdandpop",
      "Turn off forwarding and remove every forwarding address"),
-    ("sign_out", F, G, N, 3600, "https://myaccount.google.com/device-activity",
+    ("sign_out", F, G, N, 3600, "https://myaccount.google.com/device-activity?authuser={email}",
      "Sign out of every device you do not recognise, or all of them"),
     ("filters", P, A, R, 0, None, "Delete filters that were added without you"),
-    ("revoke_apps", P, G, N, 3600, "https://myaccount.google.com/connections",
+    ("revoke_apps", P, G, N, 3600, "https://myaccount.google.com/connections?authuser={email}",
      "Remove every connected app except panic-button."),
-    ("app_passwords", P, G, N, 0, "https://myaccount.google.com/apppasswords",
+    ("app_passwords", P, G, N, 0, "https://myaccount.google.com/apppasswords?authuser={email}",
      "Delete every app password"),
-    ("delegates", P, G, N, 0, "https://mail.google.com/mail/u/0/#settings/accounts",
+    ("delegates", P, G, N, 0, "https://mail.google.com/mail/?authuser={email}#settings/accounts",
      "Remove every delegate who can access your mail"),
-    ("recovery", P, G, N, 0, "https://myaccount.google.com/security",
+    ("recovery", P, G, N, 0, "https://myaccount.google.com/security?authuser={email}",
      "Check that your recovery phone and email are yours"),
-    ("password", P, G, N, 0, "https://myaccount.google.com/signinoptions/password",
+    ("password", P, G, N, 0, "https://myaccount.google.com/signinoptions/password?authuser={email}",
      "Change your password now. This disconnects panic-button; run "
      "`panic arm --personal <email> --reconnect` straight after so the 24-hour watch can continue."),
 ]
 _TIER = {c[0]: c[2] for c in _CATALOG}
-_AFTER_READ = {"imap_pop"}  # turning it off erases the IMAP/POP state the first read records
+_AFTER_READ = {"imap_pop"}  # turning it off erases the POP state the first read records
 
 
 def authorize(client_config: dict, login_hint: str | None = None) -> dict:
@@ -71,12 +74,14 @@ class Personal:
         return cache[account_id]
 
     def catalog(self, account: Account) -> list[Step]:
-        return [Step(account.id, a, ph, t, title, link, w, l, a in _AFTER_READ) for a, ph, t, w, l, link, title in _CATALOG]
+        email = quote(account.id, safe="@")
+        return [Step(account.id, a, ph, t, title, link and link.format(email=email), w, l, a in _AFTER_READ)
+                for a, ph, t, w, l, link, title in _CATALOG]
 
     def snapshot(self, account: Account) -> Snapshot:
         svc = self._svc(account.id)
         return {"filters": gs.filters(svc), "forwarding": gs.forwarding(svc),
-                "forwarding_addresses": gs.forwarding_addresses(svc), "imap_pop": gs.imap_pop(svc)}
+                "forwarding_addresses": gs.forwarding_addresses(svc), "imap_pop": gs.imap_pop(svc, imap=False)}
 
     @staticmethod
     def _known(step: Step, baseline: Snapshot, category: str) -> list[str]:
@@ -90,13 +95,13 @@ class Personal:
             raise NotImplementedError(f"{step.action} is a guided step")
         svc = self._svc(step.account)
         if step.action == "imap_pop":
-            gs.disable_imap_pop(svc)
+            gs.disable_imap_pop(svc, imap=False)
         else:
             gs.delete_filters_outside(svc, self._known(step, baseline, "filters"))
 
     def check(self, step: Step, baseline: Snapshot) -> bool | None:
         if step.action == "imap_pop":
-            return gs.imap_pop(self._svc(step.account)) == []
+            return gs.imap_pop(self._svc(step.account), imap=False) == []
         if step.action == "forwarding_off":  # the title promises every address is gone, so both are read
             keep = self._known(step, baseline, "forwarding_addresses")
             svc = self._svc(step.account)
