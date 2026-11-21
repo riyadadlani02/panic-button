@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from panic import executor, google_personal, log, microsoft_personal, notify, report
+from panic import cli_setup, executor, google_personal, log, microsoft_personal, notify, report
 from panic.cli_arm import _plan_lines, cmd_arm, cmd_rehearse
 from panic.cli_guard import cmd_guard
 from panic.graph import lock_order, resetters
@@ -261,6 +261,7 @@ def _parser() -> argparse.ArgumentParser:
         sp.set_defaults(fn=fn)
         return sp
 
+    add("setup", lambda a: cli_setup.run(a, p), "Guided setup: explains each service, asks what it needs, then arms it.")
     arm = add("arm", cmd_arm, "Add an account (or a Workspace domain) and record its baseline.")
     arm.add_argument("--personal", metavar="EMAIL")
     arm.add_argument("--microsoft-personal", metavar="EMAIL", help="arm your own Outlook.com or Hotmail account")

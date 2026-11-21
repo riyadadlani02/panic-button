@@ -61,12 +61,28 @@ Read this before relying on a connector. "Tested against recorded response shape
 
 ## Install
 
-Install the tool and copy the vault to the second device before you need it.
+One command installs the `panic` command for your user (macOS; Linux is untested and shows no notifications). It installs [uv](https://astral.sh/uv) if you do not have it, needs no `sudo`, and is removed with `uv tool uninstall panic`.
+
+```
+curl -LsSf https://raw.githubusercontent.com/riyadadlani02/panic-button/main/install.sh | sh
+```
+
+Then open a new terminal window and run the guided setup:
+
+```
+panic setup
+```
+
+`panic setup` asks which account you want to protect, lists the steps for that service, offers to open the pages you need, asks for the address, id or file the service gives you, and then arms the account. It prints the equivalent `panic arm` command each time, and it does nothing that `arm` does not do. The per-service sections below are the same steps in full. It does not create the provider credentials for you: each person or organisation still makes their own.
+
+To work on the code instead, clone the repository and run it in place. The commands in the rest of this file are written this way; with the installed command, drop the `uv run` prefix.
 
 ```
 uv sync
 uv run panic --help
 ```
+
+Copy the vault to the second device before you need it (`panic export DEST`).
 
 ## Try it without an account
 
@@ -237,6 +253,7 @@ Global options: `--vault PATH` (default `~/.panic/panic.vault`), `--keyfile PATH
 
 | Command | Does |
 |---|---|
+| `setup` | Guided setup: explains each service, asks what it needs, then runs `arm` for you. Repeats until you stop. |
 | `arm --personal EMAIL --client-secrets FILE` | Arm a personal Gmail account (recovery check, baseline, reset edges). `--reconnect` re-authorises only. |
 | `arm --workspace --sa-key FILE --admin EMAIL --domain DOMAIN` | Arm every user in a Workspace domain; the admin is protected. |
 | `arm --microsoft-tenant TENANT --client-id ID --client-secret-file FILE --admin UPN` | Arm every user of a Microsoft 365 tenant; the admin is protected. |
