@@ -300,16 +300,39 @@ def _arm_guided(a) -> int:
     return 0
 
 
-def _arm_github(a) -> int:
-    from panic.github import GitHub
-    if not a.token_file:
-        raise CliError("--github needs --token-file FILE.")
+def _read_token(a) -> str:
     try:
         token = Path(a.token_file).expanduser().read_text().strip()
     except OSError as e:
         raise CliError(f"could not read the token file {a.token_file}: {e.strerror}")
     if not token or any(c.isspace() for c in token):
         raise CliError(f"{a.token_file} should hold the token and nothing else.")
+    return token
+
+
+def _arm_slack(a) -> int:
+    from panic.slack import ALLOWS, Slack
+    if not a.token_file:
+        raise CliError("--slack needs --token-file FILE.")
+    token = _read_token(a)
+    probe = (a.connectors or {}).get("slack") or Slack({"token": token})
+    try:  # a failed read here must stop the arm: guessing a lower plan would leave the workspace under-protected
+        plan, team, owner = probe.detect_plan(), probe.workspace(), probe.primary_owner().lower()
+        users = {e.lower(): i for e, i in probe.members().items()}
+    except Exception as e:
+        raise CliError(f"could not read the Slack workspace or detect its plan: {e}")
+    cred = {"token": token, "plan": plan, "team": team, "users": users, "primary_owner": owner}
+    rc = _arm_org(a, "slack", "Slack", owner, lambda: Slack(cred), lambda ws: cred)
+    if rc == 0:
+        print(f"Slack plan: {plan}. This tool {ALLOWS[plan]}.")
+    return rc
+
+
+def _arm_github(a) -> int:
+    from panic.github import GitHub
+    if not a.token_file:
+        raise CliError("--github needs --token-file FILE.")
+    token = _read_token(a)
     login = a.github.lower()
     acct_id = f"org:{a.org.lower()}" if a.org else login
     account = Account(acct_id, "github")
@@ -366,13 +389,15 @@ def cmd_arm(a) -> int:
         return _arm_workspace(a)
     if a.microsoft_tenant:
         return _arm_microsoft(a)
+    if a.slack:
+        return _arm_slack(a)
     if a.github:
         return _arm_github(a)
     if a.personal:
         return _arm_personal(a)
     if a.microsoft_personal:
         return _arm_microsoft_personal(a)
-    raise CliError("Give --personal EMAIL, --microsoft-personal EMAIL, --workspace, --microsoft-tenant TENANT, --github LOGIN or --guided KEY.")
+    raise CliError("Give --personal EMAIL, --microsoft-personal EMAIL, --workspace, --microsoft-tenant TENANT, --slack, --github LOGIN or --guided KEY.")
 
 
 # -- rehearse -----------------------------------------------------------

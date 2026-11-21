@@ -210,8 +210,8 @@ def cmd_release(a) -> int:
     conn = _connectors(a, s.data, s).get(acct.provider)
     if not hasattr(conn, "release"):
         raise CliError(f"{acct.provider} accounts cannot be released by this tool.")
-    ms = acct.provider == "microsoft_365"
-    if not _yes(f"Release {uid}? This " + ("re-enables sign-in." if ms else "unsuspends it and sets a temporary password.")):
+    note = {"microsoft_365": "re-enables sign-in.", "slack": "reactivates the member."}.get(acct.provider)
+    if not _yes(f"Release {uid}? This " + (note or "unsuspends it and sets a temporary password.")):
         print("Nothing changed.")
         return 1
     # Recorded first, so a running watch never re-suspends an account that was just released.
@@ -221,7 +221,7 @@ def cmd_release(a) -> int:
     except Exception as e:
         s.update(lambda d: d.__setitem__("released", sorted(set(d.get("released", [])) - {uid})))
         raise CliError(f"could not release {uid}: {e}")
-    print(f"Released {uid}. " + (result if ms else f"Temporary password (shown once): {result}"))
+    print(f"Released {uid}. " + (result if note else f"Temporary password (shown once): {result}"))
     return 0
 
 
@@ -273,7 +273,8 @@ def _parser() -> argparse.ArgumentParser:
     arm.add_argument("--client-id", metavar="ID", help="Microsoft app registration (client) id")
     arm.add_argument("--client-secret-file", metavar="FILE", help="file holding the app's client secret")
     arm.add_argument("--github", metavar="LOGIN", help="your GitHub login (with --org, the organisation admin's login)")
-    arm.add_argument("--token-file", metavar="FILE", help="file holding the GitHub token")
+    arm.add_argument("--token-file", metavar="FILE", help="file holding the GitHub or Slack token")
+    arm.add_argument("--slack", action="store_true", help="arm a Slack workspace (you are its primary owner)")
     arm.add_argument("--org", metavar="NAME", help="arm this GitHub organisation instead of the account")
     add("map", cmd_map, "Show which accounts can reset which.")
     add("rehearse", cmd_rehearse, "Read every account and show what is outside its baseline.")

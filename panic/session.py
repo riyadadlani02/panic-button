@@ -176,6 +176,9 @@ def _connectors(a, data: dict, s: "Session | None" = None) -> dict:
     if "microsoft_365" in cred:
         from panic.microsoft_365 import Microsoft365
         out["microsoft_365"] = Microsoft365(cred["microsoft_365"])
+    if "slack" in cred:
+        from panic.slack import Slack
+        out["slack"] = Slack(cred["slack"])
     if "github" in cred:
         from panic.github import GitHub
         out["github"] = GitHub(cred["github"])
