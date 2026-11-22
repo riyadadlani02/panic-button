@@ -10,3 +10,4 @@ sa.json
 *service-account*.json
 client_secret*.json
 demo/*.mp4
+dist/
