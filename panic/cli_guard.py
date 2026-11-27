@@ -84,7 +84,7 @@ def cmd_guard(a) -> int:
                 if poll():
                     return
         while True:
-            mark["t"] = time.time()
+            mark["t"] = a.now()  # pass start; the app shows it as the last check
             data = _reload(a, s, conns, data)
             s.data = data
             try:
