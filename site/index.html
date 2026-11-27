@@ -190,15 +190,15 @@ footer { padding:28px var(--pad) 44px; display:flex; flex-wrap:wrap; gap:10px 30
   <div class="cols c2">
     <div>
       <h2 class="title"><span>Or don't</span><span class="line">Press</span><span class="line">At all</span></h2>
-      <p>Leave it on guard. Every few minutes it compares each account with the settings you approved. A new forwarding rule, a new key or a sign-in the provider flags, and it presses by itself, then tells you.</p>
-      <p class="dim">It decides from a fixed list of rules, with no AI model involved. It presses an account at most once in 24 hours and never touches your protected admin.</p>
+      <p>Leave it on guard. Every few minutes it compares each account with the settings you approved. A new forwarding rule, a new key or a sign-in the provider flags, and it asks you first. If nobody answers within 15 minutes, it locks the risky changes and tells you.</p>
+      <p class="dim">It decides from a fixed list of rules, with no AI model involved. Say "It was me" and the change becomes your new baseline. It presses an account at most once in 24 hours and never touches your protected admin.</p>
     </div>
     <div class="cols">
       <div class="hud">
         <div class="num">15 s</div>
         <div class="gauge" role="img" aria-label="Caught 15 seconds into a 30 second check interval"><i></i></div>
-        <div class="scale small dim"><span>rule added</span><span>guard pressed</span><span>30 s</span></div>
-        <p class="small dim" style="margin:14px 0 0">Live test on a real Gmail account, checking every 30 seconds, nobody at the keyboard.</p>
+        <div class="scale small dim"><span>rule added</span><span>guard noticed</span><span>30 s</span></div>
+        <p class="small dim" style="margin:14px 0 0">How fast it noticed a hidden rule in a live test on a real Gmail account, checking every 30 seconds. That test used the earlier version, which pressed at once.</p>
       </div>
       <div class="hud">
         <h3>What it will not claim</h3>
