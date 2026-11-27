@@ -8,6 +8,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 import json
 
 from panic import gmail_settings as gs
+from panic.checkup import Check
 from panic.model import Account, Finding, Phase, Snapshot, Step, Tier, WatchPolicy
 from panic.signals import drift, gmail_rule_code
 
@@ -83,6 +84,14 @@ class Personal:
         svc = self._svc(account.id)
         return {"filters": gs.filters(svc), "forwarding": gs.forwarding(svc),
                 "forwarding_addresses": gs.forwarding_addresses(svc), "imap_pop": gs.imap_pop(svc, imap=False)}
+
+    def posture(self, account: Account) -> list[Check]:
+        svc, a = self._svc(account.id), account.id
+        link = f"https://mail.google.com/mail/?authuser={quote(a, safe='@')}#settings/fwdandpop"
+        pop, fwd = gs.imap_pop(svc, imap=False), gs.forwarding(svc)
+        return [Check(a, "pop", "fix", "POP access is on", link) if pop else Check(a, "pop", "good", "POP access is off"),
+                Check(a, "forwarding", "fix", "Automatic forwarding is on", link) if fwd
+                else Check(a, "forwarding", "good", "Automatic forwarding is off")]
 
     def signals(self, account: Account, snapshot: Snapshot, baseline: Snapshot) -> list[Finding]:
         def classify(cat: str, item: str) -> str | None:

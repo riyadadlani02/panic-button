@@ -4,6 +4,7 @@ import threading
 from collections.abc import Callable
 
 from panic import graph_mail
+from panic.checkup import Check
 from panic.http import Api
 from panic.model import Account, Finding, Phase, Snapshot, Step, Tier, WatchPolicy
 from panic.signals import drift
@@ -94,6 +95,15 @@ class MicrosoftPersonal:
 
     def snapshot(self, account: Account) -> Snapshot:
         return {"inbox_rules": graph_mail.rules(self._api_for(account.id), "me")}
+
+    def posture(self, account: Account) -> list[Check]:
+        a = account.id
+        fwd = any(graph_mail.rule_code(r, None) == "rule_forwards_outside" for r in graph_mail.rules(self._api_for(a), "me"))
+        rules = (Check(a, "forwarding_rules", "fix", "An inbox rule forwards your mail",
+                       "https://outlook.live.com/mail/0/options/mail/rules") if fwd
+                 else Check(a, "forwarding_rules", "good", "No inbox rule forwards your mail"))
+        return [rules, Check(a, "forwarding", "unknown", "This tool cannot read automatic forwarding: check it is off",
+                             "https://outlook.live.com/mail/0/options/mail/forwarding")]
 
     def signals(self, account: Account, snapshot: Snapshot, baseline: Snapshot) -> list[Finding]:
         return drift(account.id, baseline, snapshot,

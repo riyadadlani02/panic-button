@@ -6,11 +6,13 @@ import time
 from collections.abc import Callable
 from urllib.parse import quote, urlsplit
 
+from panic.checkup import Check
 from panic.http import Api, ApiError
 from panic.model import Account, Finding, Phase, Snapshot, Step, Tier, WatchPolicy
 from panic.signals import drift
 
 BASE = "https://api.github.com"
+TOKENS = "https://github.com/settings/tokens"
 REPO_REFRESH_S = 3600  # per-repository reads cost one call per repo, so the guard reuses them for an hour
 
 F, P, A, G = Phase.FREEZE, Phase.PURGE, Tier.API, Tier.GUIDED
@@ -144,13 +146,27 @@ def _rate_limited(e: ApiError) -> bool:
             or "rate limit" in e.body.lower())
 
 
+def _no_admin(e: ApiError) -> bool:
+    return e.status == 404 or (e.status == 403 and not _rate_limited(e))
+
+
 def _runners(api, path, make):
     try:
         return _read_list(api, path, lambda r: (make(r), (f"{path}/{r['id']}", None)), {"per_page": 100}, "runners")
     except ApiError as e:
-        if e.status == 404 or (e.status == 403 and not _rate_limited(e)):  # no admin rights there: none we can see
+        if _no_admin(e):  # no admin rights there: none we can see
             return []
         raise
+
+
+def _runners_hidden(api, path) -> bool:
+    try:
+        api.pages(path, {"per_page": 100}, "runners")
+    except ApiError as e:
+        if _no_admin(e):
+            return True
+        raise
+    return False
 
 
 def _repo_runners(api, repo, rid):
@@ -245,6 +261,32 @@ class GitHub:
     def snapshot(self, account: Account) -> Snapshot:
         entries = self._entries(account, SNAPSHOT_CATS[_is_org(account.id)], fresh=False)
         return {c: [item for item, _ in es] for c, es in entries.items()}
+
+    def posture(self, account: Account) -> list[Check]:
+        api, a = self._api(account.id), account.id
+        if _is_org(a):
+            q = quote(a.removeprefix("org:"), safe="")
+            on = api.get(f"/orgs/{q}").get("two_factor_requirement_enabled")  # hidden from non-owners
+            link, paths = f"https://github.com/organizations/{q}/settings/security", [f"/orgs/{q}/actions/runners"]
+            texts = ("The organisation requires two-factor authentication",
+                     "The organisation does not require two-factor authentication",
+                     "Could not read whether the organisation requires two-factor authentication")
+        else:
+            on = api.get("/user").get("two_factor_authentication")
+            link = "https://github.com/settings/security"
+            paths = [f"/repos/{quote(r['full_name'], safe='/')}/actions/runners"
+                     for r in api.pages("/user/repos", {"affiliation": "owner", "per_page": 100})]
+            texts = ("Two-factor authentication is on", "Two-factor authentication is off",
+                     "Could not read whether two-factor authentication is on")
+        out = [Check(a, "two_factor", "good", texts[0]) if on
+               else Check(a, "two_factor", "unknown" if on is None else "fix", texts[2 if on is None else 1], link)]
+        # The guard reads these as "no runners", so a new one would go unseen.
+        hidden = sum(_runners_hidden(api, p) for p in paths)
+        where = f"on {hidden} of {len(paths)} repositories" if not _is_org(a) else "in the organisation"
+        out.append(Check(a, "runners", "unknown", f"Self-hosted runners cannot be read {where}: the token lacks admin "
+                         "rights, so the guard would not see a new one", TOKENS) if hidden
+                   else Check(a, "runners", "good", "Self-hosted runners can be read"))
+        return out
 
     def signals(self, account: Account, snapshot: Snapshot, baseline: Snapshot) -> list[Finding]:
         org = _is_org(account.id)

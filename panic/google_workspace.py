@@ -21,6 +21,7 @@ from google.oauth2 import service_account
 from googleapiclient.errors import HttpError
 
 from panic import gmail_settings as gs
+from panic.checkup import Check
 from panic.model import Account, Finding, Phase, Severity, Snapshot, Step, Tier, WatchPolicy
 from panic.signals import TEXT, drift, gmail_rule_code
 
@@ -31,6 +32,7 @@ SCOPES = [_AUTH + s for s in ("admin.directory.user", "admin.directory.user.secu
 # Asked for by the reports service alone: delegation refuses a token if any requested scope is not authorised,
 # so a tenant without it must still be able to press.
 REPORTS_SCOPES = [_AUTH + "admin.reports.audit.readonly"]
+TWO_STEP = "https://admin.google.com/ac/security/2sv"
 SUSPICIOUS = {"suspicious_login", "suspicious_login_less_secure_app", "suspicious_programmatic_login",
               "account_disabled_hijacked"}
 
@@ -136,6 +138,13 @@ class Workspace:
         return {"forwarding": gs.forwarding(g), "forwarding_addresses": self._fwd_addrs(a),
                 "delegates": self._delegates(a), "filters": gs.filters(g), "imap_pop": gs.imap_pop(g),
                 "recovery": self._recovery(a), "apps": self._tokens(a), "app_passwords": self._asps(a)}
+
+    def posture(self, account: Account) -> list[Check]:
+        on = self._call(self._dir().users().get(userKey=account.id)).get("isEnrolledIn2Sv")
+        if on is None:
+            return [Check(account.id, "two_step", "unknown", "2-step verification could not be read", TWO_STEP)]
+        return [Check(account.id, "two_step", "good", "2-step verification is on")] if on else [
+            Check(account.id, "two_step", "fix", "2-step verification is not turned on", TWO_STEP)]
 
     def signals(self, account: Account, snapshot: Snapshot, baseline: Snapshot) -> list[Finding]:
         self._refuse_admin(account.id)

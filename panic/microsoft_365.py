@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 from panic import graph_mail
+from panic.checkup import Check
 from panic.http import Api
 from panic.model import Account, Finding, Phase, Severity, Snapshot, Step, Tier, WatchPolicy
 from panic.signals import TEXT, drift
@@ -30,6 +31,8 @@ _CATALOG = [
     ("password", P, G, N, 0, False, ENTRA, "Reset the password in the Entra admin centre"),
 ]
 _RISKY_SCOPES = ("Mail.", "Files.", "full_access")
+# Email only resets a password and a temporary access pass expires: neither is a second factor.
+_WEAK_METHODS = {"password", "phone", "email", "temporaryAccessPass"}
 
 
 def _j(**fields) -> str:
@@ -101,6 +104,15 @@ class Microsoft365:
         methods = graph_mail.pages(self._api, f"{self._u(a)}/authentication/methods")
         return {"inbox_rules": graph_mail.rules(self._api, a), "consent_grants": [g for _, g in self._grants(a)],
                 "auth_methods": [f"{m['@odata.type']}:{m['id']}" for m in methods]}
+
+    def posture(self, account: Account) -> list[Check]:
+        # Method types only: a phone number or device name is item content an admin never sees.
+        kinds = {m["@odata.type"].removeprefix("#microsoft.graph.").removesuffix("AuthenticationMethod")
+                 for m in graph_mail.pages(self._api, f"{self._u(account.id)}/authentication/methods")}
+        if kinds - _WEAK_METHODS:
+            return [Check(account.id, "second_factor", "good", "Has a passkey, authenticator app or Windows Hello")]
+        detail = "Only SMS or voice calls as a second factor" if "phone" in kinds else "No second factor registered"
+        return [Check(account.id, "second_factor", "fix", detail + "; register a passkey or authenticator app", ENTRA)]
 
     def signals(self, account: Account, snapshot: Snapshot, baseline: Snapshot) -> list[Finding]:
         self._refuse_admin(account.id)
