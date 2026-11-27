@@ -33,16 +33,17 @@ def load_services() -> dict:
     return json.loads((files("panic") / "guided_services.json").read_text())
 
 
+REGIONS = {"IN": "India", "UK": "UK", "US": "US", "global": "Global"}
+
+
 def grouped_services(services: dict | None = None) -> str:
-    """Service keys grouped like "India - banks: sbi, hdfc; Cloud: dropbox; Other: x"; entries without country and category go to Other."""
-    order = ("India", "UK", "US", "Global")
+    """Service keys one line per group, e.g. "India: sbi, hdfc; Cloud: dropbox; Other: x"; cloud entries go to Cloud, untagged to Other."""
     groups: dict[str, list[str]] = {}
     for key, e in (services or load_services()).items():
-        country, cat = e.get("country"), e.get("category")
-        label = "Cloud" if cat == "cloud" else f"{country} \u2014 {cat}" if country and cat else "Other"
+        label = "Cloud" if e.get("category") == "cloud" else REGIONS.get(e.get("country"), "Other")
         groups.setdefault(label, []).append(key)
-    rank = lambda label: (order.index(label.split(" ")[0]) if label.split(" ")[0] in order else len(order) + (label == "Other"))
-    return "; ".join(f"{label}: {', '.join(keys)}" for label, keys in sorted(groups.items(), key=lambda g: rank(g[0])))
+    order = [*REGIONS.values(), "Cloud", "Other"]
+    return "; ".join(f"{label}: {', '.join(groups[label])}" for label in order if label in groups)
 
 
 class Guided:

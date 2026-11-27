@@ -1,39 +1,378 @@
 {
-  "apple": {"name": "Apple", "verified": false, "links": {
-    "devices": "https://account.apple.com/account/manage/section/devices",
-    "two_factor": "https://account.apple.com/account/manage/section/security",
-    "password": "https://account.apple.com/account/manage/section/security"}},
-  "amazon": {"name": "Amazon", "verified": false, "links": {
-    "two_factor": "https://www.amazon.com/ax/account/manage",
-    "recovery": "https://www.amazon.com/ax/account/manage",
-    "password": "https://www.amazon.com/ax/account/manage"}},
-  "facebook": {"name": "Facebook", "verified": false, "links": {
-    "apps": "https://www.facebook.com/settings?tab=applications",
-    "two_factor": "https://accountscenter.facebook.com/password_and_security",
-    "password": "https://accountscenter.facebook.com/password_and_security"}},
-  "instagram": {"name": "Instagram", "verified": false, "links": {
-    "apps": "https://www.instagram.com/accounts/manage_access/",
-    "two_factor": "https://accountscenter.instagram.com/password_and_security/",
-    "password": "https://accountscenter.instagram.com/password_and_security/"}},
-  "x": {"name": "X", "verified": false, "links": {
-    "devices": "https://x.com/settings/sessions",
-    "apps": "https://x.com/settings/connected_apps",
-    "two_factor": "https://x.com/settings/account/login_verification",
-    "password": "https://x.com/settings/password"}},
-  "linkedin": {"name": "LinkedIn", "verified": false, "links": {
-    "devices": "https://www.linkedin.com/mypreferences/d/where-you-re-signed-in",
-    "apps": "https://www.linkedin.com/mypreferences/d/permitted-services",
-    "two_factor": "https://www.linkedin.com/psettings/two-step-verification",
-    "password": "https://www.linkedin.com/psettings/change-password"}},
-  "paypal": {"name": "PayPal", "verified": false, "links": {
-    "two_factor": "https://www.paypal.com/myaccount/security/",
-    "password": "https://www.paypal.com/myaccount/security/"}},
-  "dropbox": {"name": "Dropbox", "verified": false, "links": {
-    "devices": "https://www.dropbox.com/account/security",
-    "apps": "https://www.dropbox.com/account/security",
-    "two_factor": "https://www.dropbox.com/account/security",
-    "password": "https://www.dropbox.com/account/security"}},
-  "netflix": {"name": "Netflix", "verified": false, "links": {
-    "sign_out": "https://www.netflix.com/account",
-    "password": "https://www.netflix.com/password"}}
+  "apple": {
+    "name": "Apple",
+    "verified": true,
+    "links": {
+      "devices": "https://account.apple.com/account/manage/section/devices",
+      "two_factor": "https://account.apple.com/account/manage/section/security",
+      "password": "https://account.apple.com/account/manage/section/security"
+    },
+    "country": "global",
+    "category": "other"
+  },
+  "amazon": {
+    "name": "Amazon",
+    "verified": true,
+    "links": {
+      "two_factor": "https://www.amazon.com/ax/account/manage",
+      "recovery": "https://www.amazon.com/ax/account/manage",
+      "password": "https://www.amazon.com/ax/account/manage"
+    },
+    "country": "global",
+    "category": "other"
+  },
+  "facebook": {
+    "name": "Facebook",
+    "verified": false,
+    "links": {
+      "apps": "https://www.facebook.com/settings?tab=applications",
+      "two_factor": "https://accountscenter.facebook.com/password_and_security",
+      "password": "https://accountscenter.facebook.com/password_and_security"
+    },
+    "country": "global",
+    "category": "other"
+  },
+  "instagram": {
+    "name": "Instagram",
+    "verified": true,
+    "links": {
+      "apps": "https://www.instagram.com/accounts/manage_access/",
+      "two_factor": "https://accountscenter.instagram.com/password_and_security/",
+      "password": "https://accountscenter.instagram.com/password_and_security/"
+    },
+    "country": "global",
+    "category": "other"
+  },
+  "x": {
+    "name": "X",
+    "verified": true,
+    "links": {
+      "devices": "https://x.com/settings/sessions",
+      "apps": "https://x.com/settings/connected_apps",
+      "two_factor": "https://x.com/settings/account/login_verification",
+      "password": "https://x.com/settings/password"
+    },
+    "country": "global",
+    "category": "other"
+  },
+  "linkedin": {
+    "name": "LinkedIn",
+    "verified": false,
+    "links": {
+      "devices": "https://www.linkedin.com/mypreferences/d/where-you-re-signed-in",
+      "apps": "https://www.linkedin.com/mypreferences/d/permitted-services",
+      "two_factor": "https://www.linkedin.com/psettings/two-step-verification",
+      "password": "https://www.linkedin.com/psettings/change-password"
+    },
+    "country": "global",
+    "category": "other"
+  },
+  "paypal": {
+    "name": "PayPal",
+    "verified": false,
+    "links": {
+      "two_factor": "https://www.paypal.com/myaccount/security/",
+      "password": "https://www.paypal.com/myaccount/security/",
+      "fraud_help": "https://www.paypal.com/uk/cshelp/article/how-do-i-report-an-unauthorised-transaction-or-account-activity-help136"
+    },
+    "country": "global",
+    "category": "payments"
+  },
+  "dropbox": {
+    "name": "Dropbox",
+    "verified": true,
+    "links": {
+      "sign_out": "https://help.dropbox.com/security/device-list-remote-sign-out",
+      "devices": "https://help.dropbox.com/security/device-list-remote-sign-out",
+      "apps": "https://help.dropbox.com/security/security-checkup",
+      "two_factor": "https://help.dropbox.com/security/security-checkup",
+      "password": "https://help.dropbox.com/security/protect-account"
+    },
+    "country": "global",
+    "category": "cloud"
+  },
+  "netflix": {
+    "name": "Netflix",
+    "verified": true,
+    "links": {
+      "sign_out": "https://www.netflix.com/account",
+      "password": "https://www.netflix.com/password"
+    },
+    "country": "global",
+    "category": "other"
+  },
+  "sbi": {
+    "name": "State Bank of India",
+    "country": "IN",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://retail.sbi.bank.in/npersonal/block_atmcard.html",
+      "fraud_help": "https://sbi.bank.in/web/customer-care/contact-centre"
+    }
+  },
+  "hdfc": {
+    "name": "HDFC Bank",
+    "country": "IN",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.hdfc.bank.in/debit-cards/services/block-debit-card-instantly",
+      "fraud_help": "https://www.hdfc.bank.in/contact-us/unauthorized-electronic-banking"
+    }
+  },
+  "icici": {
+    "name": "ICICI Bank",
+    "country": "IN",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.icici.bank.in/terms-condition/bank-account-block-debit-atm-card",
+      "fraud_help": "https://www.icici.bank.in/personal-banking/help/online-safe-banking/report-unauthorized-transaction"
+    }
+  },
+  "axis": {
+    "name": "Axis Bank",
+    "country": "IN",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.axis.bank.in/blogs/debit-card/debit-card-hotlisting",
+      "fraud_help": "https://application.axis.bank.in/webforms/axis-support/sub-issues/FND-Fraud-dc-1.aspx"
+    }
+  },
+  "kotak": {
+    "name": "Kotak Mahindra Bank",
+    "country": "IN",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.kotak.bank.in/en/help-center/cards/debit-card/block---unblock-debit-card/how-to-i-temporarily-block-my-debit-card-.html",
+      "fraud_help": "https://www.kotak.bank.in/en/help-center/bank-account/debit-card-and-atm/fraud-or-suspected-disputed-transaction/how-can-i-report-a-fraud-transaction-on-my-account-.html"
+    }
+  },
+  "paytm": {
+    "name": "Paytm",
+    "country": "IN",
+    "category": "payments",
+    "verified": false,
+    "links": {
+      "fraud_help": "https://paytm.com/blog/fraud-safety/step-by-step-guide-filing-paytm-fraud-complaint",
+      "recovery": "https://paytm.com/support/using-the-paytm-app/steps-to-recover-your-hacked-paytm-account"
+    }
+  },
+  "phonepe": {
+    "name": "PhonePe",
+    "country": "IN",
+    "category": "payments",
+    "verified": true,
+    "links": {
+      "fraud_help": "https://cms.phonepe.com/en/myhelp/account-security-reporting-fraudulent-activity"
+    }
+  },
+  "gpay_india": {
+    "name": "Google Pay India",
+    "country": "IN",
+    "category": "payments",
+    "verified": true,
+    "links": {
+      "fraud_help": "https://support.google.com/pay/india/answer/9851787"
+    }
+  },
+  "barclays": {
+    "name": "Barclays",
+    "country": "UK",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://barclays.co.uk/help/security-fraud/lost-stolen-card",
+      "fraud_help": "https://barclays.co.uk/security/reporting-fraud"
+    }
+  },
+  "hsbc_uk": {
+    "name": "HSBC UK",
+    "country": "UK",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://hsbc.co.uk/help/card-support/block-unblock",
+      "fraud_help": "https://hsbc.co.uk/help/security-centre/report-a-problem"
+    }
+  },
+  "lloyds": {
+    "name": "Lloyds Bank",
+    "country": "UK",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.lloydsbank.com/help-guidance/everyday-banking/card-and-pin-services/card-freezes.html",
+      "fraud_help": "https://www.lloydsbank.com/help-guidance/protecting-yourself-from-fraud/contact-us.html"
+    }
+  },
+  "natwest": {
+    "name": "NatWest",
+    "country": "UK",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.natwest.com/support-centre/help-with-your-card/card-functionality/how-do-i-report-a-lost-stolen-or-damaged-debit-card-and-order-a-replacement.html",
+      "fraud_help": "https://natwest.com/fraud-and-security/report-fraud.html"
+    }
+  },
+  "santander_uk": {
+    "name": "Santander UK",
+    "country": "UK",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.santander.co.uk/personal/support/fraud-and-security/lost-or-stolen-cards",
+      "fraud_help": "https://www.santander.co.uk/personal/support/fraud-and-security/how-to-report-fraud"
+    }
+  },
+  "monzo": {
+    "name": "Monzo",
+    "country": "UK",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://monzo.com/help/emergencies/monzo-card-lost-damaged-stolen",
+      "fraud_help": "https://monzo.com/help/emergencies/report-fraud/"
+    }
+  },
+  "starling": {
+    "name": "Starling Bank",
+    "country": "UK",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.starlingbank.com/features/card-controls/",
+      "fraud_help": "https://www.starlingbank.com/mobile-banking-security/fraud/"
+    }
+  },
+  "chase": {
+    "name": "Chase",
+    "country": "US",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://chase.com/personal/banking/education/basics/lost-debit-card-steps-to-take",
+      "fraud_help": "https://www.chase.com/digital/resources/privacy-security/security/report-fraud"
+    }
+  },
+  "bofa": {
+    "name": "Bank of America",
+    "country": "US",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://promo.bankofamerica.com/digital_banking_demo/mobiledebitlock",
+      "fraud_help": "https://web.bankofamerica.com/en/security/report-suspicious-activity"
+    }
+  },
+  "wellsfargo": {
+    "name": "Wells Fargo",
+    "country": "US",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.wellsfargo.com/goals-banking-made-easy/index",
+      "fraud_help": "https://www.wellsfargo.com/privacy-security/fraud/report"
+    }
+  },
+  "citi": {
+    "name": "Citi",
+    "country": "US",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.citi.com/credit-cards/understanding-credit-cards/what-to-do-when-you-lose-your-credit-card",
+      "fraud_help": "https://www.citi.com/credit-cards/understanding-credit-cards/how-to-report-credit-card-fraud"
+    }
+  },
+  "capitalone": {
+    "name": "Capital One",
+    "country": "US",
+    "category": "bank",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://www.capitalone.com/help-center/fraud-disputes/lock-your-debit-card/",
+      "fraud_help": "https://www.capitalone.com/help-center/fraud-disputes/report-fraud/"
+    }
+  },
+  "venmo": {
+    "name": "Venmo",
+    "country": "US",
+    "category": "payments",
+    "verified": true,
+    "links": {
+      "fraud_help": "https://help.venmo.com/hc/en-us/articles/217042948-What-do-I-do-if-there-s-an-unauthorized-charge-on-my-account"
+    }
+  },
+  "cashapp": {
+    "name": "Cash App",
+    "country": "US",
+    "category": "payments",
+    "verified": false,
+    "links": {
+      "freeze_card": "https://cash.app/help/309112-temporarily-disable-card",
+      "fraud_help": "https://cash.app/help/309116-unauthorized-payment"
+    }
+  },
+  "wise": {
+    "name": "Wise",
+    "country": "global",
+    "category": "payments",
+    "verified": true,
+    "links": {
+      "freeze_card": "https://wise.com/help/articles/2977977/how-do-i-freeze-or-unfreeze-my-wise-card",
+      "fraud_help": "https://wise.com/help/articles/2935783/how-do-i-report-a-fraudulent-wise-card-payment",
+      "recovery": "https://wise.com/help/articles/xfWMm6axrxXwk3CdoCgGG/someone-may-have-access-to-my-wise-account"
+    }
+  },
+  "revolut": {
+    "name": "Revolut",
+    "country": "global",
+    "category": "payments",
+    "verified": false,
+    "links": {
+      "freeze_card": "https://help.revolut.com/help/security-logging-in/how-to-report-fraud/",
+      "fraud_help": "https://help.revolut.com/help/security-logging-in/how-to-report-fraud/"
+    }
+  },
+  "icloud": {
+    "name": "iCloud",
+    "country": "global",
+    "category": "cloud",
+    "verified": true,
+    "links": {
+      "sign_out": "https://support.apple.com/en-tj/104958",
+      "devices": "https://support.apple.com/en-us/ht205064",
+      "recovery": "https://support.apple.com/HT204921"
+    }
+  },
+  "google_photos": {
+    "name": "Google Photos and Drive",
+    "country": "global",
+    "category": "cloud",
+    "verified": true,
+    "links": {
+      "sign_out": "https://support.google.com/accounts/answer/46526",
+      "devices": "https://support.google.com/accounts/answer/3067630",
+      "apps": "https://support.google.com/accounts/answer/13533235",
+      "two_factor": "https://support.google.com/accounts/answer/185839",
+      "recovery": "https://support.google.com/accounts/answer/9873049",
+      "password": "https://support.google.com/accounts/answer/41078"
+    }
+  },
+  "onedrive": {
+    "name": "OneDrive",
+    "country": "global",
+    "category": "cloud",
+    "verified": true,
+    "links": {
+      "sign_out": "https://support.microsoft.com/help/58da4a74-a719-43a6-9dd0-74a7e613229f",
+      "two_factor": "https://support.microsoft.com/en-us/help/12408",
+      "password": "https://support.microsoft.com/help/4026838"
+    }
+  }
 }

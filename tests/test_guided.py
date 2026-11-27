@@ -24,13 +24,13 @@ def test_unverified_suffix_and_missing_links_skipped():
 
 def test_custom_overrides_shipped_entry():
     steps = Guided({"amazon": FULL}).catalog(ACC)
-    assert "(link not verified)" not in steps[0].title  # shipped Amazon is unverified, custom replaced it
+    assert "(link not verified)" not in steps[0].title  # custom replaced the shipped entry
 
 
-def test_shipped_catalogue_is_https_and_unverified():
+def test_shipped_catalogue_is_https_with_links():
     from panic.guided import load_services
     for key, e in load_services().items():
-        assert e["verified"] is False and e["links"], key
+        assert isinstance(e["verified"], bool) and e["links"], key
         assert all(u.startswith("https://") for u in e["links"].values()), key
     assert Guided().catalog(ACC)[0].title.startswith("Amazon: ")
 
@@ -79,15 +79,15 @@ def test_card_freeze_and_fraud_steps_come_first_in_order():
     assert steps[1].title == "Bank: report it to the fraud team, or call the number on the back of your card"
 
 
-def test_grouped_services_by_country_and_category_with_other_for_untagged():
+def test_grouped_services_maps_codes_to_regions_with_cloud_and_other():
     from panic.guided import grouped_services
-    svc = {"x": {"links": {}}, "dropbox": {"country": "Global", "category": "cloud"},
-           "pp": {"country": "Global", "category": "payments"}, "hdfc": {"country": "India", "category": "banks"},
-           "sbi": {"country": "India", "category": "banks"}, "lloyds": {"country": "UK", "category": "banks"}}
-    assert grouped_services(svc) == ("India — banks: hdfc, sbi; UK — banks: lloyds; "
-                                     "Global — payments: pp; Cloud: dropbox; Other: x")
+    svc = {"x": {"links": {}}, "dropbox": {"country": "global", "category": "cloud"},
+           "pp": {"country": "global", "category": "payments"}, "hdfc": {"country": "IN", "category": "bank"},
+           "sbi": {"country": "IN", "category": "bank"}, "lloyds": {"country": "UK", "category": "bank"},
+           "chase": {"country": "US", "category": "bank"}}
+    assert grouped_services(svc) == "India: hdfc, sbi; UK: lloyds; US: chase; Global: pp; Cloud: dropbox; Other: x"
 
 
 def test_shipped_prompt_stays_short():
     from panic.guided import grouped_services
-    assert len(grouped_services()) < 600
+    assert len(grouped_services()) < 900
