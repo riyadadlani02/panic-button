@@ -11,7 +11,6 @@ from panic.guard import _from_ask, _key, guard_once, load_state
 from panic.model import Account, Finding, Outcome, Severity, Tier, WatchPolicy
 from panic.session import (ORG_PROVIDERS, CliError, Session, _connectors, _outcomes, _recent_results, _reload,
                            _unguarded, _warn)
-from panic.signals import TEXT
 
 MIN_INTERVAL_S = 30
 MAX_WAIT_S = 7 * 24 * 3600
