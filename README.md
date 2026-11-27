@@ -34,7 +34,7 @@ It suspends the account, resets the password to a random value nobody is told, r
 - On a personal Outlook.com account, only inbox rules are read and removed; everything else is guided.
 - On GitHub, tokens, OAuth app access, web sessions, two-factor settings and the password are guided. The tool cannot see a stolen personal access token, and its own token is one of them. Without a security-log API it only sees what was added to the lists it reads.
 - On Slack, what the tool can do depends on the plan, which is detected when you arm. Only Enterprise Grid can sign a member out and read Slack's audit log. Business+ can deactivate. Pro and Free are guided only.
-- A "guided" service (no API) is only a checklist. The tool cannot read it, watch it or detect anything on it. Every link in the shipped catalogue is unverified.
+- A "guided" service (no API) is only a checklist. The tool cannot read it, watch it or detect anything on it, and it locks nothing there.
 - A Microsoft 365 user without a mailbox cannot have its inbox rules read, so the guard reports it as unreadable on every pass.
 - Google Workspace treats every address outside the one `--domain` given at arm as outside the organisation, including a second domain of the same organisation.
 - The watch stops when the process stops.
@@ -73,7 +73,7 @@ Read this before relying on a connector. "Tested against recorded response shape
 | Personal Microsoft (Outlook.com) | no: tested against recorded response shapes only |
 | GitHub | no: tested against recorded response shapes only |
 | Slack | no: tested against recorded response shapes only |
-| Guided services | no: tested against recorded response shapes only; every link in the catalogue is unverified |
+| Guided services | no: tested against recorded response shapes only; links are checked by `scripts/check-guided-links.py`, not by a real press |
 
 ## The app
 
@@ -220,7 +220,25 @@ uv run panic --keyfile ~/panic.key arm --guided paypal --id you@example.com
 uv run panic --keyfile ~/panic.key arm --guided myservice --id you --name "My service" --link password=https://example.com/password --link two_factor=https://example.com/2fa
 ```
 
-Link kinds: `sign_out`, `devices`, `apps`, `two_factor`, `recovery`, `password`. Links must be plain `https://` addresses. Arm asks which armed accounts can reset it. The tool cannot read or watch a guided account, so there is no baseline and no detection. Every link shipped in the catalogue is unverified, and the plan marks it "(link not verified)".
+Link kinds, in the order they are shown: `freeze_card` (freeze your cards), `fraud_help` (report it to the fraud team), `sign_out`, `devices`, `apps`, `two_factor`, `recovery`, `password`. Links must be plain `https://` addresses. Arm asks which armed accounts can reset it.
+
+Nothing is detected or locked for these services. A press opens each official page in order and records what you did. The tool cannot read or watch a guided account, so there is no baseline and no detection.
+
+The catalogue has 36 services:
+
+- India: State Bank of India, HDFC Bank, ICICI Bank, Axis Bank, Kotak Mahindra Bank, Paytm, PhonePe, Google Pay India.
+- UK: Barclays, HSBC UK, Lloyds Bank, NatWest, Santander UK, Monzo, Starling Bank.
+- US: Chase, Bank of America, Wells Fargo, Citi, Capital One, Venmo, Cash App.
+- Global: PayPal, Wise, Revolut, Apple, Amazon, Facebook, Instagram, X, LinkedIn, Netflix.
+- Cloud: Dropbox, iCloud, Google Photos and Drive, OneDrive.
+
+There are no phone numbers. To reach a bank's fraud team, call the number on the back of your card.
+
+Each service is marked `verified` in `panic/guided_services.json` only if every one of its links loaded (2xx) on the provider's own domain when last checked. Some banks block automated checks; those stay "link not verified" and the plan marks them so. Results can vary between runs. To re-check and update the file:
+
+```
+uv run python scripts/check-guided-links.py --write
+```
 
 ## Guard
 
