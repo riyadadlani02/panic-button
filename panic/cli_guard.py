@@ -162,7 +162,14 @@ def cmd_guard(a) -> int:
                         with contextlib.ExitStack() as held:
                             try:
                                 held.enter_context(a.press_lock)
-                            except KeyboardInterrupt:  # stopped before pressing: no cooldown for a press never made
+                            except KeyboardInterrupt:  # stopped before pressing: say so, and no cooldown for it
+                                who = ", ".join(targets)
+                                msg = (f"stopped before pressing {who}; run `panic press "
+                                       + " ".join(f"--user {x}" for x in targets) + "`.")
+                                print(f"Guard: {msg}")
+                                _guard("log the dropped press", lambda: s.log(
+                                    {"event": "guard_notice", "account": who, "code": "press_dropped", "detail": msg}))
+                                a.notifier(f"panic: {who}", msg)
                                 for x in targets:
                                     state["pressed"].pop(x, None)
                                 save()

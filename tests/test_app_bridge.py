@@ -2,12 +2,13 @@ import json
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from fake import FakeConnector
 from test_cli import HIDE, _steps
 
-from panic import vault
+from panic import log, vault
 from panic.app import keychain
 from panic.app.bridge import Busy, Runner
 from panic.app.guard_thread import GuardStopping, GuardThread
@@ -198,7 +199,9 @@ def test_a_guard_press_waits_while_the_shared_lock_is_held(box):
 def test_stopping_while_waiting_for_the_lock_leaves_nothing_marked_pressed(box):
     trigger(box[2])
     lock = threading.Lock()
-    g = GuardThread(box[0], box[1], SECRET, press_lock=lock, connectors={"fake": box[2]})
+    notes = []
+    g = GuardThread(box[0], box[1], SECRET, press_lock=lock, on_notice=lambda t, x: notes.append((t, x)),
+                    connectors={"fake": box[2]})
     g.start()
     q = wait_for(g.questions)[0]
     with lock:
@@ -208,6 +211,10 @@ def test_stopping_while_waiting_for_the_lock_leaves_nothing_marked_pressed(box):
         assert g.stop() and time.time() - t < 3
     d = load(box)
     assert d["guard"]["pressed"] == {} and box[2].ran == [] and not d.get("outcomes")
+    said = "stopped before pressing mail, bank; run `panic press --user mail --user bank`."
+    assert ("panic: mail, bank", said) in notes and f"Guard: {said}" in "".join(g.output)
+    assert {"event": "guard_notice", "account": "mail, bank", "code": "press_dropped", "detail": said}.items() <= next(
+        e for e in log.entries(Path(f"{box[0]}.log.jsonl")) if e.get("code") == "press_dropped").items()
 
 
 def test_a_guard_press_is_not_blocked_by_an_arm_job_waiting_on_a_prompt(box):
