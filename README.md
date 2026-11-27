@@ -23,7 +23,7 @@ It suspends the account, resets the password to a random value nobody is told, r
 - The guard cannot see someone who only reads mail on a personal account. No provider gives a personal account its sign-in log, and the tool never reads mail content. A change in the settings it can read is the only thing it notices.
 - The guard keeps the vault open in memory for as long as it runs. Run it only on a computer you trust.
 - The guard does not restart after a reboot, a logout or a crash. You start it again and type the passphrase.
-- An automatic press on a personal account runs API steps only. Guided steps are recorded as "Needs you" and nobody is asked. It never changes a password.
+- An automatic press on a personal account runs API steps only. Guided steps are recorded as "Needs you" and nobody is asked to do them. It never changes a password.
 - Your own change that matches a trigger gets a question first, not a press. Answer "It was me" and it becomes the new baseline. If nobody answers within the wait (15 minutes by default), a risky change is acted on, so answer in time or stop the guard first. Without a dialog (not macOS, or it failed to open) answer by hand: `panic rehearse` to approve, `panic press --user ID` to lock.
 - The guard checks every few minutes (300 seconds by default), so a break-in is noticed up to one interval late. A guard that cannot read an account reports that it could not and does not press; it prints that line every pass and notifies again every hour while it lasts.
 - The provider-verdict triggers (a Workspace sign-in Google marks suspicious, a Microsoft 365 risk detection rated high, a Slack Enterprise Grid anomaly) are unproven until checked on a real tenant. Each provider log is read again two hours back from the last read, because entries can appear late; one that appears later than that is missed.
@@ -198,11 +198,11 @@ uv run panic --keyfile ~/panic.key guard
 
 It asks for the passphrase once, then reads every armed account that is not protected and not unguarded by `panic release`, every `--interval` seconds (default 300, minimum 30). It prints one line per pass: `<HH:MM:SS> read <n> accounts, <k> findings, <m> skipped`, where skipped counts protected accounts, released accounts not yet resumed, and accounts the tool cannot read for signals. It stops on Ctrl-C. A Ctrl-C during an automatic press ends that press (what it did is saved and reported) and the guard carries on; Ctrl-C again once the press is over stops the guard. Only one guard can run on a vault at a time.
 
-**What counts as risky.** Only these findings are triggers. Any other difference from the baseline is a notice: shown once, written to the audit log, never acted on without you.
+**What counts as risky.** Only these findings are triggers. Any other difference from the baseline is a notice: shown once and written to the audit log. It is never acted on unless you answer "Lock it down"; with a wait set, a notice nobody answers is accepted as the new baseline at the deadline.
 
 | Account | Trigger |
 |---|---|
-| Gmail, Workspace | A new filter that forwards or that deletes, bins or marks mail read and archives it (Workspace: forwarding only to an address outside your domain); a new forwarding address (Workspace: only outside your domain); POP switched on; on Workspace also a new delegate, changed recovery details, and a sign-in Google itself marks suspicious |
+| Gmail, Workspace | A new filter that forwards, bins or deletes mail or skips the inbox (Workspace: forwarding only to an address outside your domain); a new forwarding address (Workspace: only outside your domain); POP switched on; on Workspace also a new delegate, changed recovery details, and a sign-in Google itself marks suspicious |
 | Microsoft 365 | A new inbox rule that forwards outside the tenant's domains or hides mail; a new app consent with a Mail, Files or full-access scope; a new authentication method; a risk detection Microsoft rates high |
 | Personal Microsoft | A new inbox rule that forwards to any address or hides mail |
 | GitHub | A new SSH, signing or GPG key; a new email address; a new deploy key, webhook, collaborator or invitation (an organisation: a new webhook, deploy key or outside collaborator) |
@@ -212,7 +212,7 @@ An ordinary filter (a label, a star) is a notice. A rule the tool cannot parse c
 
 **What it does on a trigger.** It reads the account a second time and goes on only if the finding is still there (a provider's own high-risk verdict is acted on as it stands). It then notifies you with a macOS notification, a terminal line and bell, and the audit log, and asks you what to do (below). With `--wait 0`, and for `alert` mode and `--dry-run`, nothing is asked: `--wait 0` acts at once, as the guard first did, and the other two never act. What follows depends on `--on-detect`. A failed automatic press is notified too, and until you press by hand the guard says so instead of claiming the watch is handling it. With `--on-detect`:
 
-- `press` (the default): presses the account and every account it can reset, root first, from `panic map`. Accounts that can reset it are not pressed; the notification names them as worth checking. Guided steps are recorded as "Needs you" and nobody is asked. The 24-hour watch for those accounts then runs inside the guard. The report gains a "What triggered this press" section.
+- `press` (the default): presses the account and every account it can reset, root first, from `panic map`. Accounts that can reset it are not pressed; the notification names them as worth checking. Guided steps are recorded as "Needs you" and nobody is asked to do them. The 24-hour watch for those accounts then runs inside the guard. The report gains a "What triggered this press" section.
 - `contain`: runs only the automatic steps marked "reapply" in the table below (remove the rule, switch POP off, delete new keys), then notifies. It never locks anyone out: it leaves out suspending a Workspace user, blocking sign-in on Microsoft 365 and deactivating a Slack member, and also Workspace's delegate step, which removes every delegate, baselined or not. Where nothing is left to run (Slack, guided services) it prints that there was nothing to contain and writes no report.
 - `alert`: notifies and does nothing else.
 
@@ -231,7 +231,9 @@ An ordinary filter (a label, a star) is a notice. A rule the tool cannot parse c
 | Risky (a trigger in the table above) | Acted on at the deadline |
 | Harmless ("changed" notice) | Accepted as the new baseline |
 
-`--wait 0` skips the question and acts at once. A negative value is refused.
+`--wait 0` skips the question and acts at once. A negative value, or more than 604800 (7 days), is refused.
+
+Each question is about one item (one rule, one address), so a second item gets its own question and never moves the first deadline; an item swapped for another of the same kind keeps the first deadline. While an account is in its 24-hour cooldown nothing is asked about it: findings are notified as before. An account that cannot be read is still acted on when a risky question on it falls due or you answer "Lock it down". After a restart each open question gets its own dialog again, with the text it first showed.
 
 **Limits, stated again.** An account is pressed at most once in 24 hours, also when it is downstream of another trigger; later triggers in that window are left to the watch and notified. The protected admin or owner is never pressed. A released account is not guarded again until `panic rehearse` asks "Resume guarding" and you answer yes, and the watch does not lock it again until a new press of that account. For Workspace, Microsoft 365 and Slack, notifications, the log and the report name a finding by its kind and withhold rule contents; `panic removed --user ID` prints them. On GitHub, per-repository reads (deploy keys, webhooks, collaborators, invitations) are repeated once an hour, so those are noticed up to an hour late; keys and email addresses are read every pass.
 
