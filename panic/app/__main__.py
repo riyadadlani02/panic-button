@@ -5,7 +5,7 @@ from pathlib import Path
 import webview
 
 from panic.app import api as api_module
-from panic.app.api import Api
+from panic.app.api import CONTRACT, Api
 from panic.app.bridge import Runner
 from panic.cli import DEFAULT_VAULT
 from panic.cli_setup import DEFAULT_KEY
@@ -26,13 +26,21 @@ def _dock_reopens(show) -> None:
     cocoa.BrowserView.AppDelegate = PanicAppDelegate
 
 
+def _open(api: Api):
+    """The window, with only the contract methods exposed. Never js_api=api: pywebview resolves any dotted name from
+    a js_api object with plain getattr, underscores and __globals__ included. Exposed functions match by exact name."""
+    window = webview.create_window("panic button", (WEB / "index.html").as_uri(), width=780, height=560,
+                                   min_size=(640, 480), background_color="#3a6ea5")
+    window.expose(*(getattr(api, n) for n in CONTRACT))
+    api._window = window
+    window.events.closing += api._closing
+    return window
+
+
 def main() -> None:
     runner = Runner(os.environ.get("PANIC_VAULT", DEFAULT_VAULT), os.environ.get("PANIC_KEYFILE", DEFAULT_KEY))
     api = Api(runner)
-    window = webview.create_window("panic button", (WEB / "index.html").as_uri(), js_api=api, width=780, height=560,
-                                   min_size=(640, 480), background_color="#3a6ea5")
-    api._window = window
-    window.events.closing += api._closing
+    _open(api)
     _dock_reopens(api._show)
     webview.start(api._launch)  # file:// page: pywebview starts no HTTP server
 

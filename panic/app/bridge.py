@@ -158,6 +158,10 @@ class Runner:
         vault.load(Path(self.vault), passphrase, Path(self.keyfile).read_bytes())  # VaultError when wrong
         self._passphrase = passphrase
 
+    def read(self) -> dict:
+        """The vault as saved now; needs unlock() first."""
+        return vault.load(Path(self.vault), self._passphrase, Path(self.keyfile).read_bytes())
+
     @property
     def unlocked(self) -> bool:
         return self._passphrase is not None

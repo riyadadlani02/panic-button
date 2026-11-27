@@ -35,3 +35,11 @@ def answer(proc):
     except Exception:
         pass
     return "none"
+
+
+def close(proc) -> None:
+    """Takes an open dialog away, as when the question was answered elsewhere."""
+    try:
+        proc.kill()
+    except Exception:
+        pass

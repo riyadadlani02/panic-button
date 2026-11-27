@@ -62,7 +62,7 @@ function closeModal(id) {
   if (top) { const t = $(top).querySelector("button.default") || $(top).querySelector("button"); if (t) t.focus(); }
   else if (rec && rec.from && document.contains(rec.from) && !rec.from.hidden) rec.from.focus();
 }
-function closable(id) { return id !== "o-job" || !job || job.done; }
+function closable(id) { return id !== "o-wait" && (id !== "o-job" || !job || job.done); }
 document.addEventListener("click", (e) => {
   if (e.target.closest("[data-close]")) {
     const o = e.target.closest(".overlay");
@@ -222,12 +222,12 @@ menubar.addEventListener("keydown", (e) => {
 
 async function doAct(act) {
   if (act === "lock") { clientLocked = true; stateSig = ""; closeAll(); render(); }
-  else if (act === "forget") { await api().forget_mac(); await refresh(); alertBox("This Mac will ask for the passphrase next time."); }
+  else if (act === "forget") { const r = await api().forget_mac(); await refresh(); alertBox(r.ok ? "This Mac will ask for the passphrase next time." : r.error); }
   else if (act === "quit") openModal("o-quit");
   else if (act === "add") startJob("setup");
   else if (act === "guard-start") guardStart();
   else if (act === "guard-stop") guardStop();
-  else if (act === "login") { await api().set_login_item(!S.login_item); await refresh(); }
+  else if (act === "login") { const r = await api().set_login_item(!S.login_item); await refresh(); if (!r.ok) alertBox(r.error); }
   else if (act === "about") openModal("o-about");
 }
 function closeAll() { [...stack].reverse().forEach((s) => closeModal(s.id)); }
@@ -237,14 +237,17 @@ async function guardStart() {
   if (!r.ok) alertBox(r.error || "The guard could not start.");
   await refresh();
 }
-async function guardStop() { await api().guard_stop(); await refresh(); }
+async function guardStop() { const r = await api().guard_stop(); await refresh(); if (!r.ok) alertBox(r.error); }
 $("btn-guard-toggle").addEventListener("click", () => (S.guard.running ? guardStop() : guardStart()));
 
 /* ---------- quit ---------- */
 $("home-close").addEventListener("click", () => openModal("o-quit"));
 async function quit(keep) {
   closeModal("o-quit");
-  await api().quit(keep);
+  if (!keep) openModal("o-wait", "w-text");   // an in-flight press finishes before the app closes
+  const r = await api().quit(keep);
+  closeModal("o-wait");
+  if (!r.ok) alertBox(r.error);
 }
 $("quit-yes").addEventListener("click", () => quit(true));
 $("quit-no").addEventListener("click", () => quit(false));
@@ -393,15 +396,18 @@ $("job-cancel").addEventListener("click", async () => {
   if (job.done) return;
   job.cancelled = true; $("job-cancel").disabled = true;
   $("job-status").textContent = "Stopping…";
-  await api().job_cancel();
+  const r = await api().job_cancel();
+  if (!r.ok) alertBox(r.error);
 });
 $("job-close").addEventListener("click", () => closeModal("o-job"));
 $("job-again").addEventListener("click", () => { closeModal("o-job"); startJob("checkup_again"); });
 
 /* ---------- reports ---------- */
-$("btn-reports").addEventListener("click", async () => { await loadReports(); openModal("o-reports"); });
+$("btn-reports").addEventListener("click", async () => { if (await loadReports() !== false) openModal("o-reports"); });
 async function loadReports() {
-  const list = (await api().reports()).slice().sort((a, b) => String(b.when).localeCompare(String(a.when)));
+  const got = await api().reports();
+  if (!Array.isArray(got)) { alertBox(got.error); return false; }
+  const list = got.slice().sort((a, b) => String(b.when).localeCompare(String(a.when)));
   const ul = $("r-list");
   ul.replaceChildren(); reportSel = null; $("r-open").disabled = true;
   $("r-empty").hidden = list.length > 0;
@@ -419,7 +425,9 @@ function selectReport(b) {
 }
 async function viewReport(name) {
   $("t-viewer").textContent = name;
-  $("v-text").textContent = await api().report(name);
+  const text = await api().report(name);
+  if (typeof text !== "string") { alertBox(text.error); return; }
+  $("v-text").textContent = text;
   openModal("o-viewer", "v-text");
 }
 $("r-open").addEventListener("click", () => reportSel && viewReport(reportSel));
@@ -444,7 +452,7 @@ function boot() {
       s.src = "dev-api.js"; s.onload = () => { $("dev-banner").hidden = false; go(); };
       document.body.append(s);
     } else {
-      document.body.append(el("p", { class: "dev-banner", style: "position:static;margin:20px", text: "panic button must be opened as the app. For a preview add ?dev to the address." }));
+      document.body.append(el("p", { class: "dev-banner static", text: "panic button must be opened as the app. For a preview add ?dev to the address." }));
     }
   }, 700);
 }

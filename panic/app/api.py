@@ -1,22 +1,36 @@
-"""What the page calls (window.pywebview.api). pywebview exposes every public name, so only the page's methods are
-public; the Runner, the guard and the passphrase stay in underscore attributes and are never returned."""
+"""What the page calls (window.pywebview.api). Only the CONTRACT methods are handed to window.expose (see __main__),
+never the object, so the page cannot walk to the Runner, the guard or the passphrase."""
+import functools
 import json
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from panic import ask, notify, vault
+from panic import ask, notify
 from panic.app import keychain, login_item
 from panic.app.bridge import Busy
 from panic.app.guard_thread import GuardStopping, GuardThread
 from panic.vault import VaultError
 
+CONTRACT = ("state", "unlock", "forget_mac", "start_job", "job_events", "job_answer", "job_cancel", "guard_start",
+            "guard_stop", "questions", "answer_question", "reports", "report", "set_login_item", "quit")
 PREFS = "~/Library/Application Support/panic-button/prefs.json"  # never the passphrase
 JOBS = {"setup": ["setup"], "press_all": ["press", "--all"], "checkup": ["checkup"],
         "checkup_again": ["checkup", "--again"], "report": ["report"]}
 FOR_ACCOUNT = {"press_user": "press", "release": "release"}
 STAMP = "%Y%m%dT%H%M%SZ"
+
+
+def _says_errors(fn):
+    """The page gets {ok: false, error} instead of a Python exception."""
+    @functools.wraps(fn)
+    def wrapper(*a, **kw):
+        try:
+            return fn(*a, **kw)
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return wrapper
 
 
 class Api:
@@ -26,8 +40,9 @@ class Api:
         self._prefs, self._home, self._ask, self._notifier = Path(prefs).expanduser(), home, ask, notifier
         self._kw = main_kwargs
         self._vault = Path(runner.vault)
-        self._passphrase = self._new_passphrase = None
+        self._new_passphrase = None  # a vault being created by setup; the Runner holds the unlocked one
         self._guard = None
+        self._asked: set = set()  # questions with a macOS dialog open
         self._remember, self._hidden, self._quitting = True, False, False
         self._last_check = None
         self._accounts, self._accounts_from = [], None
@@ -44,6 +59,7 @@ class Api:
                           "last_check": self._last_check, "questions": len(g.questions()) if g else 0},
                 "accounts": self._read_accounts()}
 
+    @_says_errors
     def unlock(self, passphrase, remember=True) -> dict:
         try:
             self._runner.unlock(passphrase)
@@ -66,6 +82,7 @@ class Api:
         self._opened(passphrase)
         return out
 
+    @_says_errors
     def forget_mac(self) -> dict:
         keychain.delete(self._vault, self._keyring)
         self._remember = False
@@ -86,7 +103,6 @@ class Api:
 
     def _opened(self, passphrase) -> None:
         with self._lock:
-            self._passphrase = passphrase
             if self._guard is None:
                 self._guard = self._guard_cls(self._runner.vault, self._runner.keyfile, passphrase,
                                               on_question=self._on_question, on_notice=self._notifier,
@@ -101,7 +117,7 @@ class Api:
         try:
             st = self._vault.stat()
             if (st.st_mtime_ns, st.st_size) != self._accounts_from:
-                d = vault.load(self._vault, self._passphrase, Path(self._runner.keyfile).read_bytes())
+                d = self._runner.read()
                 self._accounts = [{"id": a["id"], "provider": a["provider"],
                                    "kind": "protected" if a.get("protected") else
                                    "checklist" if a["provider"] == "guided" else "guarded"} for a in d["accounts"]]
@@ -112,6 +128,7 @@ class Api:
 
     # -- jobs --
 
+    @_says_errors
     def start_job(self, kind, extra=None) -> dict:
         if kind in JOBS:
             argv = JOBS[kind]
@@ -143,28 +160,31 @@ class Api:
         asked = next((e for e in job.events() if e["type"] == "prompt" and e["id"] == prompt_id), None)
         ok = job.answer(prompt_id, value)
         if ok and asked and asked["secret"] and asked["text"].startswith("Choose a passphrase"):
-            self._new_passphrase = value  # a vault created by setup opens with it once the job ends
+            with self._lock:
+                self._new_passphrase = value  # a vault created by setup opens with it once the job ends
         return ok
 
+    @_says_errors
     def job_cancel(self) -> dict:
         if self._runner.job:
             self._runner.job.cancel()
         return {"ok": True}
 
     def _after_setup(self) -> None:
-        job, pw = self._runner.job, self._new_passphrase
-        if pw is None or not job or not job.done:
-            return
-        self._new_passphrase = None
+        with self._lock:  # two polls must not both take it
+            job, pw = self._runner.job, self._new_passphrase
+            if pw is None or not job or not job.done:
+                return
+            self._new_passphrase = None
         if not self._runner.unlocked and self._vault.exists():
             self.unlock(pw, self._remember)
 
     # -- guard --
 
+    @_says_errors
     def guard_start(self) -> dict:
         if not self._guard:
             return {"ok": False, "error": "Unlock panic button first."}
-        self._set_pref("guard", True)
         try:
             self._guard.start()
         except GuardStopping as e:
@@ -174,12 +194,14 @@ class Api:
                 lines = "".join(self._guard.output).strip().splitlines()
                 return {"ok": False, "error": lines[-1] if lines else "The guard stopped."}
             time.sleep(0.05)
+        self._set_pref("guard", True)
         return {"ok": True}
 
+    @_says_errors
     def guard_stop(self) -> dict:
-        self._set_pref("guard", False)
         if self._guard:
             self._guard.stop()
+        self._set_pref("guard", False)  # after the stop: a failed save never leaves the guard running
         return {"ok": True}
 
     def questions(self) -> list[dict]:
@@ -198,14 +220,29 @@ class Api:
 
     def _dialog(self, q) -> None:
         """The macOS dialog, while the window is hidden; its answer reaches the guard like the page's."""
-        def run():
-            proc = self._ask.open_dialog(f"panic: {q['account']}", q["text"], q["deadline"] - time.time())
-            if proc is None:
+        with self._lock:
+            if q["handle"] in self._asked:
                 return
-            while (r := self._ask.answer(proc)) is None:
-                time.sleep(0.5)
-            if r in ("accept", "lock"):
-                self._guard.answer(q["handle"], r)
+            self._asked.add(q["handle"])
+
+        def still_open():
+            return any(x["handle"] == q["handle"] for x in self._guard.questions())
+
+        def run():
+            try:
+                proc = self._ask.open_dialog(f"panic: {q['account']}", q["text"], q["deadline"] - time.time())
+                if proc is None:
+                    return
+                while (r := self._ask.answer(proc)) is None:
+                    if not still_open():  # answered in the window, or past its deadline
+                        self._ask.close(proc)
+                        return
+                    time.sleep(0.5)
+                if r in ("accept", "lock"):
+                    self._guard.answer(q["handle"], r)
+            finally:
+                with self._lock:
+                    self._asked.discard(q["handle"])
         threading.Thread(target=run, daemon=True).start()
 
     # -- reports --
@@ -215,6 +252,7 @@ class Api:
             return {}
         return {p.name: p for p in self._vault.parent.glob(f"{self._vault.name}.report-*.md")}
 
+    @_says_errors
     def reports(self) -> list[dict]:
         out = []
         for name in self._report_files():
@@ -225,16 +263,19 @@ class Api:
             out.append({"name": name, "when": when.strftime("%Y-%m-%dT%H:%M:%SZ")})
         return sorted(out, key=lambda r: r["when"])
 
+    @_says_errors
     def report(self, name) -> str:
         p = self._report_files().get(name)
         return p.read_text() if p else ""
 
     # -- app --
 
+    @_says_errors
     def set_login_item(self, on) -> dict:
         (login_item.install if on else login_item.remove)(self._home)
         return {"ok": True}
 
+    @_says_errors
     def quit(self, keep_guarding) -> dict:
         if keep_guarding:
             self._hidden = True
@@ -242,13 +283,13 @@ class Api:
                 self._dialog(q)
             self._window.hide()
             return {"ok": True}
-        self._quitting = True
         if self._runner.job:
             self._runner.job.cancel()
         if self._guard:
             self._guard.stop()
         # ponytail: waits as long as an in-flight press takes; the guard's own lock wait ends on the stop
         with self._runner.press_lock:
+            self._quitting = True  # only now may the window close: a second close before this would kill the press
             self._window.destroy()
         return {"ok": True}
 

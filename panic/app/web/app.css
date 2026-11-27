@@ -119,6 +119,7 @@ button.link:focus-visible { outline: 1px dotted #000; outline-offset: 2px; }
 .cards .who { font-weight: bold; }
 .cards p { margin: 4px 0; }
 #r-list { max-height: 40vh; overflow: auto; padding: 4px; margin: 0; }
+.dev-banner.static { position: static; margin: 20px; }
 .dev-banner { position: fixed; right: 8px; bottom: 28px; z-index: 50; background: #ffffe1; border: 1px solid #000; padding: 2px 6px; font: 11px Tahoma, sans-serif; }
 
 @media (max-width: 560px) { .home-grid { grid-template-columns: 1fr; } }

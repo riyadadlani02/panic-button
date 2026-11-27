@@ -1,16 +1,15 @@
 import json
 import threading
+import time
 
 import pytest
 from test_app_bridge import SECRET, box, done, wait_for  # noqa: F401  (box is a fixture)
 
 from panic.app import keychain
-from panic.app.api import Api
+from panic.app.api import CONTRACT, Api
 from panic.app.bridge import Job, Runner
 from panic.app.guard_thread import GuardThread
 
-CONTRACT = {"state", "unlock", "forget_mac", "start_job", "job_events", "job_answer", "job_cancel", "guard_start",
-            "guard_stop", "questions", "answer_question", "reports", "report", "set_login_item", "quit"}
 
 
 class Keyring:
@@ -88,7 +87,7 @@ def app(box, tmp_path):
 
 def test_only_the_contract_is_public(app):
     api = app()
-    assert {n for n in dir(api) if not n.startswith("_")} - {"guards"} == CONTRACT
+    assert {n for n in dir(api) if not n.startswith("_")} - {"guards"} == set(CONTRACT)
 
 
 def test_state_before_unlock_has_the_page_shape_and_no_accounts(app):
@@ -272,7 +271,7 @@ def test_quit_stops_the_guard_waits_for_a_press_then_closes(app):
     api.unlock(SECRET, False)
     g = api.guards[0]
     g.press_lock.acquire()  # a press in flight
-    t = threading.Thread(target=api.quit, args=(False,))
+    t = threading.Thread(target=api.quit, args=(False,), daemon=True)
     t.start()
     wait_for(lambda: not g.running)
     assert "destroy" not in api._window.calls
@@ -286,3 +285,110 @@ def test_closing_the_window_asks_first(app):
     api = app()
     assert api._closing() is False
     wait_for(lambda: api._window.calls == ["evaluate_js"])
+
+
+# -- fix round 1 --
+
+def test_the_page_reaches_only_the_contract_through_the_real_bridge(app):
+    webview = pytest.importorskip("webview")
+    from webview.util import js_bridge_call
+
+    from panic.app import __main__ as main
+    api = app()
+    api.unlock(SECRET, False)
+    w = main._open(api)
+    calls = []
+    w.evaluate_js = lambda js: calls.append(js)
+    try:
+        for name in ["__dict__", "state.__globals__.keychain.get", "_runner", "_passphrase", "_runner._passphrase",
+                     "unlock.__globals__", "state.__self__._vault.unlink", "_prefs.write_text"]:
+            js_bridge_call(w, name, [], "1")
+        time.sleep(0.3)
+        assert calls == []
+        js_bridge_call(w, "questions", [], "2")  # the contract still works
+        wait_for(lambda: calls)
+        assert sorted(w._functions) == sorted(CONTRACT)
+    finally:
+        webview.windows.remove(w)
+
+
+def test_a_second_close_while_quit_waits_for_a_press_is_refused(app):
+    api = app()
+    api.unlock(SECRET, False)
+    lock = api.guards[0].press_lock
+    lock.acquire()
+    t = threading.Thread(target=api.quit, args=(False,), daemon=True)
+    t.start()
+    time.sleep(0.2)
+    try:
+        assert api._closing() is False  # the press is still running
+    finally:
+        lock.release()
+    t.join(3)
+    assert api._closing() is True
+
+
+def test_methods_that_fail_say_so_instead_of_raising(app, box, tmp_path):
+    class Broken(Keyring):
+        def delete_password(self, s, a):
+            raise RuntimeError("keychain locked")
+    api = app()
+    api._keyring = Broken()
+    keychain.set(box[0], "x", api._keyring)
+    assert api.forget_mac() == {"ok": False, "error": "RuntimeError: keychain locked"}
+    (tmp_path / "home").write_text("not a folder")
+    assert api.set_login_item(True)["ok"] is False
+    api.unlock(SECRET, False)
+    api._prefs = tmp_path / "home" / "prefs.json"  # its folder is a file
+    assert api.guard_stop()["ok"] is False and not api.guards[0].running  # stopped all the same
+    name = f"{box[0].name}.report-20261120T081500Z.md"
+    (box[0].parent / name).write_bytes(b"\xff\xfe bad")
+    assert api.report(name)["ok"] is False
+
+
+def test_one_mac_dialog_per_question_closed_once_answered_in_the_window(app):
+    class Open(Ask):
+        def __init__(self):
+            super().__init__(None)
+            self.closed = []
+
+        def close(self, proc):
+            self.closed.append(proc)
+    ask = Open()
+    api = app(ask=ask)
+    api.unlock(SECRET, False)
+    g = api.guards[0]
+    q = {"handle": 1, "account": "mail", "text": "New filter", "deadline": 9e9}
+    g.open = [q]
+    api.quit(True)
+    g.on_question(q)  # reported again while its dialog is open
+    api.quit(True)
+    time.sleep(0.3)
+    assert ask.opened == ["panic: mail"]
+    g.open = []  # answered in the window
+    wait_for(lambda: ask.closed == [1])
+    assert g.answers == []
+
+
+def test_setup_unlock_runs_once_when_two_polls_race(app, box):
+    class Slow:
+        @property
+        def done(self):
+            time.sleep(0.1)
+            return True
+    r = Runner(box[0], box[1])
+    unlocks = []
+    real = r.unlock
+    r.unlock = lambda pw: (unlocks.append(pw), real(pw))
+    api = app(runner=r)
+    r.job, api._new_passphrase = Slow(), SECRET
+    ts = [threading.Thread(target=api._after_setup) for _ in range(2)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len(unlocks) == 1
+
+
+def test_the_api_keeps_no_copy_of_the_passphrase(app):
+    api = app()
+    api.unlock(SECRET, False)
+    assert SECRET not in [v for v in vars(api).values() if isinstance(v, str)]
