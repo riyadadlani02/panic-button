@@ -152,9 +152,8 @@ def cmd_press(a) -> int:
         _write_report(s, o, *_render(s, o))
 
     # press absorbs Ctrl-C and EOF, so everything below still runs after an interrupt.
-    with a.press_lock:  # the app's guard never presses at the same time
-        out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, s.log,
-                             progress=_warn, checkpoint=checkpoint)
+    out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, s.log,
+                         progress=_warn, checkpoint=checkpoint, lock=a.press_lock)  # the app's guard waits meanwhile
     _guard("save the outcome to the vault", lambda: _save_outcome(s, out))
     _publish_report(s, out)
     return _watch(a, s, [o for o in _outcomes(s) if o.started_at != out.started_at] + [out], conns)
@@ -223,11 +222,12 @@ def cmd_release(a) -> int:
 
     # Recorded first, so a running watch never re-locks and a running guard never presses an account just released.
     s.update(lambda d: mark(d, True))
-    try:
-        result = conn.release(acct)
-    except Exception as e:
-        s.update(lambda d: mark(d, False))
-        raise CliError(f"could not release {uid}: {e}")
+    with a.press_lock:  # never in the middle of a guard press
+        try:
+            result = conn.release(acct)
+        except Exception as e:
+            s.update(lambda d: mark(d, False))
+            raise CliError(f"could not release {uid}: {e}")
     print(f"Released {uid}. " + (result if note else f"Temporary password (shown once): {result}"))
     return 0
 

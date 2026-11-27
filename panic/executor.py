@@ -1,4 +1,5 @@
 """Connector contract, plan compilation, the press that runs a plan and records evidence, and the watch that keeps it locked."""
+import contextlib
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed, wait
@@ -40,7 +41,7 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
           baselines: dict[str, Snapshot], confirm: Callable[[Step], bool], log: Callable[[dict], None],
           dry_run: bool = False, now: Callable[[], float] = time.time,
           progress: Callable[[str], None] = lambda s: None,
-          checkpoint: Callable[[Outcome], None] = lambda o: None) -> Outcome:
+          checkpoint: Callable[[Outcome], None] = lambda o: None, lock=None) -> Outcome:
     started = now()
     provider = {a.id: a.provider for a in accounts}
     by_id = {a.id: a for a in accounts}
@@ -123,7 +124,10 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
 
     # Hand-managed pool: leaving a `with` block would join in-flight provider calls on interrupt.
     pool = ThreadPoolExecutor(max_workers=16)
+    held = contextlib.ExitStack()  # the API phases only: a guided question must not hold it
     try:
+        if lock is not None:
+            held.enter_context(lock)
         for phase in (Phase.FREEZE, Phase.PURGE):
             steps = [s for s in plan if s.tier is Tier.API and s.phase == phase]
             progress(f"{phase.value.title()}: {len(steps)} actions")
@@ -157,6 +161,7 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
         except Exception as e:  # saving progress must never stop the press
             extra.append(done(Step("-", "checkpoint", Phase.PURGE, Tier.API, "Save progress"), Status.STILL_OPEN,
                               detail=f"could not save progress: {e}"))
+        held.close()
         if guided:
             progress(f"Guided: {len(guided)} steps for you")
         for step in guided:
@@ -175,6 +180,7 @@ def press(plan: list[Step], accounts: list[Account], edges: Edges, connectors: d
     except (KeyboardInterrupt, Exception):  # Ctrl-C, EOF or a raising confirm: keep what is gathered
         pass
     finally:
+        held.close()
         pool.shutdown(wait=False, cancel_futures=True)
     late: list[Result] = []
     for s in plan:

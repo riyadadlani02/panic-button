@@ -11,6 +11,10 @@ from panic.app.bridge import routed
 ANSWERS = ("accept", "lock", "none")  # "none": dismissed, as a dialog closed without a button
 
 
+class GuardStopping(Exception):
+    pass
+
+
 class _Asker:
     """The guard's dialog protocol (panic.ask): open_dialog returns a handle, answer(handle) polls it."""
 
@@ -41,6 +45,21 @@ class _Asker:
             return q["answer"] or "none"  # past the deadline unanswered: a dialog that gave up
 
 
+class _StoppableLock:
+    """The shared press lock, as the guard waits for it: a stop request ends the wait."""
+
+    def __init__(self, lock, stop):
+        self._lock, self._stop = lock, stop
+
+    def __enter__(self):
+        while not self._lock.acquire(timeout=0.2):
+            if self._stop.is_set():
+                raise KeyboardInterrupt  # cmd_guard un-marks the targets, then stops
+
+    def __exit__(self, *exc):
+        self._lock.release()
+
+
 class GuardThread:
     def __init__(self, vault, keyfile, passphrase, on_question=lambda q: None, on_notice=lambda title, text: None,
                  press_lock=None, **main_kwargs):
@@ -54,14 +73,29 @@ class GuardThread:
         self.code: int | None = None
 
     @property
-    def running(self) -> bool:
+    def _alive(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
-    def start(self) -> None:
+    @property
+    def running(self) -> bool:
+        return self._alive and not self._stop.is_set()
+
+    @property
+    def stopping(self) -> bool:
+        """Asked to stop, still finishing a pass: shown as off, cannot be started yet."""
+        return self._alive and self._stop.is_set()
+
+    def start(self, timeout: float = 3) -> None:
         if self.running:
             return
+        if self.stopping:
+            self._thread.join(timeout)
+            if self._alive:
+                raise GuardStopping("The guard is still finishing a pass; start it again in a moment.")
         self._stop.clear()
         self.code = None
+        with self._asker._lock:  # a new run reopens its questions from the vault
+            self._asker.open.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -70,7 +104,7 @@ class GuardThread:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout)
-        return not self.running
+        return not self._alive
 
     def questions(self) -> list[dict]:
         with self._asker._lock:
@@ -94,14 +128,15 @@ class GuardThread:
     def _run(self) -> None:
         with routed(self):
             self.code = cli.main(["--vault", self.vault, "--keyfile", self.keyfile, "guard"], asker=self._asker,
-                                 notifier=self.on_notice, sleep=self._sleep, press_lock=self.press_lock, **self._kw)
+                                 notifier=self.on_notice, sleep=self._sleep,
+                                 press_lock=_StoppableLock(self.press_lock, self._stop), **self._kw)
 
     # -- handler, called on the guard's thread --
 
-    def write(self, s: str) -> None:
+    def _write(self, s: str) -> None:
         self.output.append(s)
 
-    def prompt(self, text: str, secret: bool) -> str:
+    def _prompt(self, text: str, secret: bool) -> str:
         if secret and text.startswith("Passphrase"):
             return self._passphrase
         raise EOFError  # the guard asks nothing else; never answered by default

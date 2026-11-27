@@ -1,4 +1,5 @@
 """`panic guard`: poll armed accounts and press automatically when something looks like a takeover."""
+import contextlib
 import copy
 import fcntl
 import os
@@ -158,7 +159,14 @@ def cmd_guard(a) -> int:
                         else:  # a new press puts lock enforcement back
                             _guard("clear the released list", lambda: s.update(lambda d: d.__setitem__(
                                 "released", sorted(set(d.get("released", [])) - set(targets)))))
-                        with a.press_lock:
+                        with contextlib.ExitStack() as held:
+                            try:
+                                held.enter_context(a.press_lock)
+                            except KeyboardInterrupt:  # stopped before pressing: no cooldown for a press never made
+                                for x in targets:
+                                    state["pressed"].pop(x, None)
+                                save()
+                                raise
                             out = executor.press(plan, accounts, edges, conns, data["baselines"], lambda step: False,
                                                  s.log, progress=_warn, checkpoint=checkpoint)
                         out.triggers = [f"{f.code}: {shown(f)}" for f in findings]

@@ -9,19 +9,18 @@ from pathlib import Path
 
 from panic import cli, vault
 
-_routes: dict[int, object] = {}  # thread id -> handler with prompt(text, secret) and write(text)
+_routes: dict[int, object] = {}  # thread id -> handler with _prompt(text, secret) and _write(text)
 _real_input, _real_getpass = builtins.input, getpass.getpass
-WHOLE_JOB_LOCKED = {"arm", "setup", "release"}  # press takes the lock itself, around the press only
 
 
 def _input(prompt=""):
     h = _routes.get(threading.get_ident())
-    return h.prompt(str(prompt), False) if h else _real_input(prompt)
+    return h._prompt(str(prompt), False) if h else _real_input(prompt)
 
 
 def _getpass(prompt="Password: ", stream=None):
     h = _routes.get(threading.get_ident())
-    return h.prompt(str(prompt), True) if h else _real_getpass(prompt, stream)
+    return h._prompt(str(prompt), True) if h else _real_getpass(prompt, stream)
 
 
 class _Out:
@@ -33,7 +32,7 @@ class _Out:
     def write(self, s):
         h = _routes.get(threading.get_ident())
         if h:
-            h.write(s)
+            h._write(s)
             return len(s)
         return self._stream.write(s) if self._stream else len(s)  # a windowed app may have no stream
 
@@ -70,8 +69,8 @@ class Busy(Exception):
 class Job:
     """One `panic.cli.main(argv)` run. A prompt waits until answer() or cancel(); it is never answered by default."""
 
-    def __init__(self, argv, secret=None, lock=None, **main_kwargs):
-        self.argv, self._secret, self._lock, self._kw = list(argv), secret, lock, main_kwargs
+    def __init__(self, argv, secret=None, **main_kwargs):
+        self.argv, self._secret, self._kw = list(argv), secret, main_kwargs
         self._events: list[dict] = []
         self._cond = threading.Condition()
         self._ids = itertools.count(1)
@@ -92,40 +91,22 @@ class Job:
         if self._cancelled.wait(seconds):
             raise KeyboardInterrupt
 
-    @contextlib.contextmanager
-    def _held(self):
-        if self._lock is None:
-            yield
-            return
-        if not self._lock.acquire(blocking=False):
-            print("Waiting for the guard to finish pressing.")
-            while not self._lock.acquire(timeout=0.2):
-                if self._cancelled.is_set():
-                    raise EOFError
-        try:
-            yield
-        finally:
-            self._lock.release()
-
     def _run(self) -> None:
         code = 1
         with routed(self):
             try:
-                with self._held():
-                    code = cli.main(self.argv, sleep=self._sleep, **self._kw)
-            except (EOFError, KeyboardInterrupt):
-                print("Cancelled.", file=sys.stderr)
+                code = cli.main(self.argv, sleep=self._sleep, **self._kw)
             except BaseException as e:  # the window must see the end of every job
                 print(f"error: {type(e).__name__}: {e}", file=sys.stderr)
         self._emit({"type": "done", "code": code})
 
     # -- handler, called on the job's thread --
 
-    def write(self, s: str) -> None:
+    def _write(self, s: str) -> None:
         if s:
             self._emit({"type": "output", "text": s})
 
-    def prompt(self, text: str, secret: bool) -> str:
+    def _prompt(self, text: str, secret: bool) -> str:
         if secret and self._secret and (v := self._secret(text)) is not None:
             return v
         with self._cond:
@@ -168,23 +149,26 @@ class Runner:
     def __init__(self, vault_path, keyfile, press_lock=None, **main_kwargs):
         self.vault, self.keyfile = str(Path(vault_path).expanduser()), str(Path(keyfile).expanduser())
         self.press_lock = press_lock or threading.Lock()
-        self.passphrase: str | None = None
+        self._passphrase: str | None = None  # private: never handed to the page
         self.job: Job | None = None
         self._kw = main_kwargs
         self._starting = threading.Lock()
 
     def unlock(self, passphrase: str) -> None:
         vault.load(Path(self.vault), passphrase, Path(self.keyfile).read_bytes())  # VaultError when wrong
-        self.passphrase = passphrase
+        self._passphrase = passphrase
+
+    @property
+    def unlocked(self) -> bool:
+        return self._passphrase is not None
 
     def _secret(self, text: str) -> str | None:
-        return self.passphrase if text.startswith("Passphrase") else None  # "Choose a passphrase" goes to the page
+        return self._passphrase if text.startswith("Passphrase") else None  # "Choose a passphrase" goes to the page
 
     def start(self, argv: list[str]) -> Job:
         with self._starting:
             if self.job and not self.job.done:
                 raise Busy("busy")
-            lock = self.press_lock if argv and argv[0] in WHOLE_JOB_LOCKED else None
-            self.job = Job(["--vault", self.vault, "--keyfile", self.keyfile, *argv], secret=self._secret, lock=lock,
+            self.job = Job(["--vault", self.vault, "--keyfile", self.keyfile, *argv], secret=self._secret,
                            press_lock=self.press_lock, **self._kw)
             return self.job.start()

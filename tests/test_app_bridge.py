@@ -10,8 +10,8 @@ from test_cli import HIDE, _steps
 from panic import vault
 from panic.app import keychain
 from panic.app.bridge import Busy, Runner
-from panic.app.guard_thread import GuardThread
-from panic.model import Finding, Severity
+from panic.app.guard_thread import GuardStopping, GuardThread
+from panic.model import Finding, Phase, Severity, Step, Tier
 from panic.vault import VaultError
 
 SECRET = "Correct-Horse-9271"
@@ -113,7 +113,7 @@ def test_unlock_refuses_a_wrong_passphrase(box):
     r = Runner(box[0], box[1])
     with pytest.raises(VaultError):
         r.unlock("wrong")
-    assert r.passphrase is None
+    assert not r.unlocked and not hasattr(r, "passphrase")
 
 
 def test_a_manual_press_waits_for_the_shared_lock_and_cancel_stops_its_watch(box):
@@ -192,4 +192,70 @@ def test_a_guard_press_waits_while_the_shared_lock_is_held(box):
         time.sleep(1.5)
         assert box[2].ran == []
     wait_for(lambda: box[2].ran)
+    assert g.stop()
+
+
+def test_stopping_while_waiting_for_the_lock_leaves_nothing_marked_pressed(box):
+    trigger(box[2])
+    lock = threading.Lock()
+    g = GuardThread(box[0], box[1], SECRET, press_lock=lock, connectors={"fake": box[2]})
+    g.start()
+    q = wait_for(g.questions)[0]
+    with lock:
+        g.answer(q["handle"], "lock")
+        time.sleep(1.5)
+        t = time.time()
+        assert g.stop() and time.time() - t < 3
+    d = load(box)
+    assert d["guard"]["pressed"] == {} and box[2].ran == [] and not d.get("outcomes")
+
+
+def test_a_guard_press_is_not_blocked_by_an_arm_job_waiting_on_a_prompt(box):
+    r = runner(box)
+    job = r.start(["arm", "--guided", "amazon", "--id", "me@x.test"])
+    prompt(job)
+    trigger(box[2])
+    g = GuardThread(box[0], box[1], SECRET, press_lock=r.press_lock, connectors={"fake": box[2]})
+    g.start()
+    g.answer(wait_for(g.questions)[0]["handle"], "lock")
+    wait_for(lambda: box[2].ran)
+    assert g.stop()
+    job.cancel()
+    done(job)
+
+
+def test_a_guard_press_is_not_blocked_by_a_manual_press_waiting_on_done(box):
+    box[2].steps = _steps() + [Step("", "forward", Phase.PURGE, Tier.GUIDED, "Check forwarding")]
+    r = runner(box)
+    job = r.start(["press", "--user", "bank"])
+    assert "Done?" in prompt(job)["text"]
+    trigger(box[2])
+    g = GuardThread(box[0], box[1], SECRET, press_lock=r.press_lock, connectors={"fake": box[2]})
+    g.start()
+    g.answer(wait_for(g.questions)[0]["handle"], "lock")
+    wait_for(lambda: any(x.startswith("mail/") for x in box[2].ran))
+    assert g.stop()
+    job.cancel()
+    done(job)
+
+
+def test_start_after_a_failed_stop_never_shows_the_guard_on(box):
+    gate, reading = threading.Event(), threading.Event()
+
+    def slow(account):
+        reading.set()
+        gate.wait(10)
+        return {}
+
+    box[2].snapshot = slow
+    g = GuardThread(box[0], box[1], SECRET, connectors={"fake": box[2]})
+    g.start()
+    reading.wait(5)
+    assert not g.stop(timeout=0.2) and not g.running and g.stopping
+    with pytest.raises(GuardStopping):
+        g.start(timeout=0.2)
+    assert not g.running
+    gate.set()
+    g.start()
+    assert g.running and not g.stopping
     assert g.stop()
