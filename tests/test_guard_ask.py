@@ -13,9 +13,9 @@ EV = Finding("mail", "new_device", Severity.TRIGGER, "x", key="e1")
 OTHER = Finding("mail", "changed", Severity.NOTICE, "x", ("b",))
 
 
-def run(c, state, t=1e6, wait=900, dry_run=False, got=None):
+def run(c, state, t=1e6, wait=900, dry_run=False, got=None, base=None):
     acts, asked, accepted = [], [], []
-    lines = guard_once([Account("mail", "fake")], [], {"mail": c}, {"mail": {}}, set(), state, "press",
+    lines = guard_once([Account("mail", "fake")], [], {"mail": c}, {"mail": base or {}}, set(), state, "press",
                        lambda targets, f: (acts.append(targets), got is not None and got.append(f)),
                        lambda f, e: None, lambda: None, lambda: t,
                        dry_run, wait, lambda a, fs, d: asked.append((a, fs, d)), lambda a, s: accepted.append((a, s)))
@@ -250,3 +250,24 @@ def test_a_cooling_account_drops_its_questions_and_asks_again_after_the_cooldown
     t = 1e6 + 10 + COOLDOWN_S + 1
     _, acts, asked, _ = run(c, state, t)
     assert acts == [] and len(asked) == 1 and state["asks"][_key(TRIG)]["deadline"] == t + 900
+
+
+def test_a_rehearsed_risky_change_leaves_no_floor():
+    state, c = new_state(), conn([TRIG])
+    run(c, state)
+    c.findings = []  # `panic rehearse` made it the baseline
+    run(c, state, 1e6 + 300, base={"forward": ["r"]})
+    assert state["floors"] == {}
+    c.findings = [HIDE]
+    _, acts, asked, _ = run(c, state, 1e6 + 3900, base={"forward": ["r"]})
+    assert acts == [] and len(asked) == 1 and state["asks"][_key(HIDE)]["deadline"] == 1e6 + 3900 + 900
+
+
+def test_an_overdue_returning_change_prints_no_ask_line():
+    state, c = new_state(), conn([TRIG])
+    run(c, state)
+    c.findings = []
+    run(c, state, 1e6 + 300)
+    c.findings = [TRIG]
+    lines, acts, asked, _ = run(c, state, 1e6 + 1200)
+    assert acts == [["mail"]] and asked == [] and not any(x.startswith("ask ") for x in lines)

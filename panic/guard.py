@@ -1,4 +1,6 @@
 """One polling pass of the self-detection guard. Pure: reading, acting, notifying and saving are arguments."""
+import hashlib
+import json
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -45,6 +47,10 @@ def _from_ask(k: str, v: dict) -> Finding:
     code, _, item = k[len(v["account"]) + 1:].partition("|")
     return Finding(v["account"], code, Severity.TRIGGER if v["risky"] else Severity.NOTICE, TEXT.get(code, code),
                    (item,) if item else ())
+
+
+def _fingerprint(base: Snapshot | None) -> str:
+    return hashlib.sha256(json.dumps(base, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
 def _hms(t: float) -> str:
@@ -171,9 +177,11 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
         first = min([v["deadline"] for v in mine.values() if v["risky"] and v["answer"] is None]
                     + [floors.get(acct.id, float("inf"))])
         in_read = {_key(f) for f in snap_found}
+        base = _fingerprint(baselines.get(acct.id))
         for k, v in mine.items():  # gone from a full read, or an event answered / harmless and out of time
             if not v["event"] and k not in in_read:
-                if v["risky"] and v["answer"] is None:
+                # a changed baseline means the owner approved it (`panic rehearse`): no floor
+                if v["risky"] and v["answer"] is None and v.get("base", base) == base:
                     floors[acct.id] = min(floors.get(acct.id, v["deadline"]), v["deadline"])
                 del asks[k]
             elif v["event"] and (v["answer"] == "accept" or (not v["risky"] and t >= v["deadline"])):
@@ -186,9 +194,10 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
             risky = f.severity == Severity.TRIGGER
             deadline = min(t + wait, first) if risky else t + wait
             asks[_key(f)] = mine[_key(f)] = {"account": acct.id, "risky": risky, "event": f in ev,
-                                              "deadline": deadline, "answer": None}
+                                              "deadline": deadline, "answer": None, "base": base}
             fate = ("pressed" if mode == "press" else "contained") if risky else "accepted"
-            lines.append(f"ask {acct.id}: {f.text} It will be {fate} at {_hms(deadline)} unless you answer.")
+            if deadline > t:
+                lines.append(f"ask {acct.id}: {f.text} It will be {fate} at {_hms(deadline)} unless you answer.")
         fresh = [f for f in fresh if mine[_key(f)]["deadline"] > t]  # an overdue one acts below, unasked
         if fresh and ask is not None:
             ask(acct.id, fresh, min(mine[_key(f)]["deadline"] for f in fresh))
