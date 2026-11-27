@@ -51,7 +51,7 @@ Read this before relying on a connector. "Tested against recorded response shape
 
 | Connector | Run on a real account |
 |---|---|
-| Personal Gmail | yes: pressed, watched and rehearsed on a real throwaway account. The guard ran on it too: a hiding rule added in the browser was noticed within one 30-second interval, pressed, and named in the report. That run used the old immediate press: nobody was asked, and the guard now asks first; a star-only rule gave a notice and no press. Not yet run there: `alert` and `contain` modes, a restart, and a second hiding rule inside 24 hours. |
+| Personal Gmail | yes: pressed, watched and rehearsed on a real throwaway account. The guard ran on it too: a hiding rule added in the browser was noticed within one 30-second interval, pressed, and named in the report. That run used the old immediate press; a star-only rule gave a notice and no press. Asking first also ran there: "It was me" saved a planted hiding filter as the new baseline, and an unanswered one was pressed and deleted at its deadline. Not yet run there: `alert` and `contain` modes, a restart, and a second hiding rule inside 24 hours. |
 | Google Workspace | no: tested against recorded response shapes only |
 | Microsoft 365 | no: tested against recorded response shapes only |
 | Personal Microsoft (Outlook.com) | no: tested against recorded response shapes only |
