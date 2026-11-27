@@ -29,3 +29,12 @@ def test_not_verified_on_4xx_5xx_error_or_off_domain():
                 (200, "https://evilbank.co.uk/pw"), (200, "https://bank.com/pw"), (200, "https://co.uk/pw")]:
         ok, problems = chk.check_entry(ENTRY, fake({"https://www.bank.co.uk/freeze": good, "https://login.bank.co.uk/pw": bad}))
         assert not ok and len(problems) == 1, bad
+
+
+def test_each_indian_bank_on_bank_in_is_its_own_domain():
+    from importlib.util import module_from_spec, spec_from_file_location
+    from pathlib import Path
+    spec = spec_from_file_location("cgl", Path(__file__).resolve().parent.parent / "scripts" / "check-guided-links.py")
+    m = module_from_spec(spec); spec.loader.exec_module(m)
+    assert m.registrable("https://www.hdfc.bank.in/x") == "hdfc.bank.in"
+    assert m.registrable("https://sbi.bank.in/x") != m.registrable("https://evil.bank.in/x")

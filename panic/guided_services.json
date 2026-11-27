@@ -12,7 +12,7 @@
   },
   "amazon": {
     "name": "Amazon",
-    "verified": true,
+    "verified": false,
     "links": {
       "two_factor": "https://www.amazon.com/ax/account/manage",
       "recovery": "https://www.amazon.com/ax/account/manage",
@@ -57,7 +57,7 @@
   },
   "linkedin": {
     "name": "LinkedIn",
-    "verified": false,
+    "verified": true,
     "links": {
       "devices": "https://www.linkedin.com/mypreferences/d/where-you-re-signed-in",
       "apps": "https://www.linkedin.com/mypreferences/d/permitted-services",
@@ -345,7 +345,7 @@
     "category": "cloud",
     "verified": true,
     "links": {
-      "sign_out": "https://support.apple.com/en-tj/104958",
+      "sign_out": "https://support.apple.com/en-us/104958",
       "devices": "https://support.apple.com/en-us/ht205064",
       "recovery": "https://support.apple.com/HT204921"
     }

@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 CATALOGUE = Path(__file__).resolve().parent.parent / "panic" / "guided_services.json"
 # ponytail: small hand list, not the public suffix list; add a suffix here when a provider needs one
-MULTI = {"co.uk", "org.uk", "co.in", "com.au", "co.jp", "com.br"}
+MULTI = {"co.uk", "org.uk", "co.in", "bank.in", "com.au", "co.jp", "com.br"}
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
 
