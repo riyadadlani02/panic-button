@@ -257,15 +257,16 @@ footer { padding:28px var(--pad) 44px; display:flex; flex-wrap:wrap; gap:10px 30
       <div class="hud">
         <h3>After you download</h3>
         <ol class="do">
-          <li><span>Unzip it and open Terminal in that folder.</span></li>
-          <li><span>Run <code>sh install.sh</code>. No admin password needed.</span></li>
-          <li><span>Run <code>panic setup</code>. It asks which account you want to protect, walks you through that service, and arms it.</span></li>
+          <li><span>Open the <code>.dmg</code> and drag panic button to Applications.</span></li>
+          <li><span>Open it. macOS will refuse the first time, because the app is unsigned. Go to System Settings, Privacy &amp; Security, and choose Open Anyway.</span></li>
+          <li><span>The app walks you through setup and arms your first account.</span></li>
+          <li><span>Prefer a terminal? Run <code>sh install.sh</code>, then <code>panic setup</code>.</span></li>
           <li><span>Run <code>panic checkup</code> for a read-only safety check. It changes nothing on your accounts.</span></li>
         </ol>
       </div>
       <div class="hud">
         <h3>One thing stays yours</h3>
-        <p class="small" style="margin:0">You create your own access with each provider: a sign-in client for Gmail, a token for GitHub, an app registration for Microsoft. Nothing is shared with anyone else, and your secrets sit in a vault on your machine that needs both a passphrase and a separate key file to open.</p>
+        <p class="small" style="margin:0">You create your own access with each provider: a sign-in client for Gmail, a token for GitHub, an app registration for Microsoft. Nothing is shared with anyone else, and your secrets sit in a vault on your machine that needs both a passphrase and a separate key file to open. If you leave "Remember on this Mac" ticked in the app, anyone using your unlocked Mac can open it.</p>
       </div>
     </div>
   </div>
