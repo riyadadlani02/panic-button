@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>panic button</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="vendor/xp.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="desktop">
+
+<!-- Unlock -->
+<section id="w-unlock" class="window screen" aria-labelledby="t-unlock" hidden>
+  <div class="title-bar">
+    <img class="title-icon" src="icon.svg" alt="">
+    <div class="title-bar-text" id="t-unlock">panic button</div>
+    <div class="title-bar-controls"><button aria-label="Minimize" disabled></button><button aria-label="Maximize" disabled></button><button aria-label="Close" disabled></button></div>
+  </div>
+  <div class="window-body">
+    <form id="unlock-form" class="stack" autocomplete="off">
+      <p id="unlock-intro" class="lead">Enter your passphrase to open panic button.</p>
+      <div id="unlock-fields" class="stack">
+        <div class="field-row-stacked">
+          <label for="pass">Passphrase</label>
+          <input id="pass" type="password" autocomplete="current-password" spellcheck="false">
+        </div>
+        <div class="field-row"><input id="remember" type="checkbox" checked><label for="remember">Remember on this Mac</label></div>
+      </div>
+      <p id="unlock-error" class="error" role="alert"></p>
+      <div class="buttons">
+        <button type="button" id="btn-setup">Set up panic button</button>
+        <button type="submit" id="btn-unlock" class="default">Unlock</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<!-- Home -->
+<main id="w-home" class="window screen" aria-labelledby="t-home" hidden>
+  <div class="title-bar">
+    <img class="title-icon" src="icon.svg" alt="">
+    <div class="title-bar-text" id="t-home">panic button</div>
+    <div class="title-bar-controls"><button aria-label="Minimize" disabled></button><button aria-label="Maximize" disabled></button><button aria-label="Close" id="home-close"></button></div>
+  </div>
+  <nav class="menubar" role="menubar" aria-label="Main menu" id="menubar">
+    <div class="menu"><button role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="m-file"><u>F</u>ile</button>
+      <ul role="menu" id="m-file" hidden>
+        <li role="none"><button role="menuitem" data-act="lock">Lock app</button></li>
+        <li role="none"><button role="menuitem" data-act="forget">Forget this Mac</button></li>
+        <li role="none" class="sep"></li>
+        <li role="none"><button role="menuitem" data-act="quit">Quit…</button></li>
+      </ul></div>
+    <div class="menu"><button role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="m-acc"><u>A</u>ccounts</button>
+      <ul role="menu" id="m-acc" hidden>
+        <li role="none"><button role="menuitem" data-act="add">Add account…</button></li>
+      </ul></div>
+    <div class="menu"><button role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="m-guard"><u>G</u>uard</button>
+      <ul role="menu" id="m-guard" hidden>
+        <li role="none"><button role="menuitem" data-act="guard-start" id="mi-start">Start</button></li>
+        <li role="none"><button role="menuitem" data-act="guard-stop" id="mi-stop">Stop</button></li>
+        <li role="none" class="sep"></li>
+        <li role="none"><button role="menuitemcheckbox" aria-checked="false" data-act="login" id="mi-login"><span class="tick" aria-hidden="true"></span>Open at login</button></li>
+      </ul></div>
+    <div class="menu"><button role="menuitem" aria-haspopup="true" aria-expanded="false" aria-controls="m-help"><u>H</u>elp</button>
+      <ul role="menu" id="m-help" hidden>
+        <li role="none"><button role="menuitem" data-act="about">About panic button</button></li>
+      </ul></div>
+  </nav>
+  <div class="window-body home-body">
+    <div class="home-grid">
+      <fieldset class="accounts">
+        <legend>Accounts</legend>
+        <ul id="accounts" class="tree-view" role="listbox" aria-label="Accounts"></ul>
+        <p id="no-accounts" class="muted" hidden>No accounts yet. Use Accounts, Add account.</p>
+        <div class="buttons left">
+          <button type="button" id="btn-add">Add account…</button>
+          <button type="button" id="btn-lock-one" disabled>Lock this one</button>
+          <button type="button" id="btn-release" disabled>Release…</button>
+        </div>
+      </fieldset>
+      <div class="panic-box">
+        <button type="button" id="btn-panic" class="panic" aria-describedby="panic-hint"><span>PANIC</span></button>
+        <p id="panic-hint" class="panic-hint">Lock everything now</p>
+      </div>
+    </div>
+    <div class="buttons left toolbar">
+      <button type="button" id="btn-checkup">Check-up</button>
+      <button type="button" id="btn-reports">Reports</button>
+      <button type="button" id="btn-guard-toggle">Stop</button>
+    </div>
+  </div>
+  <div class="status-bar" role="status">
+    <p class="status-bar-field" id="st-guard">Guard: off</p>
+    <p class="status-bar-field" id="st-last">Last check: never</p>
+    <p class="status-bar-field">Questions: <button type="button" class="link" id="st-questions">0</button></p>
+  </div>
+</main>
+
+<!-- Modals -->
+<div class="overlay" id="o-questions" hidden>
+  <div class="window dialog wide" role="dialog" aria-modal="true" aria-labelledby="t-questions">
+    <div class="title-bar"><div class="title-bar-text" id="t-questions">Questions</div>
+      <div class="title-bar-controls"><button aria-label="Close" data-close></button></div></div>
+    <div class="window-body">
+      <p id="q-empty" class="muted">Nothing needs your attention.</p>
+      <ul id="q-list" class="cards"></ul>
+      <div class="buttons"><button type="button" data-close class="default">Close</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="o-job" hidden>
+  <div class="window dialog job" role="dialog" aria-modal="true" aria-labelledby="t-job">
+    <div class="title-bar"><div class="title-bar-text" id="t-job">Task</div>
+      <div class="title-bar-controls"><button aria-label="Close" id="job-x" disabled></button></div></div>
+    <div class="window-body">
+      <label for="job-out" class="sr">Output</label>
+      <pre id="job-out" class="output" tabindex="0"></pre>
+      <div id="job-prompt" class="window prompt" role="group" aria-labelledby="jp-title" hidden>
+        <div class="title-bar"><div class="title-bar-text" id="jp-title">panic button</div></div>
+        <div class="window-body">
+          <p id="jp-text" class="prompt-text"></p>
+          <form id="jp-form" autocomplete="off">
+            <input id="jp-input" type="text" spellcheck="false">
+            <div class="buttons" id="jp-buttons"></div>
+          </form>
+        </div>
+      </div>
+      <p id="job-status" class="muted" role="status"></p>
+      <div class="buttons">
+        <button type="button" id="job-again" hidden>Check again</button>
+        <button type="button" id="job-cancel">Cancel</button>
+        <button type="button" id="job-close" class="default" hidden>Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="o-reports" hidden>
+  <div class="window dialog" role="dialog" aria-modal="true" aria-labelledby="t-reports">
+    <div class="title-bar"><div class="title-bar-text" id="t-reports">Reports</div>
+      <div class="title-bar-controls"><button aria-label="Close" data-close></button></div></div>
+    <div class="window-body">
+      <p id="r-empty" class="muted" hidden>No reports yet.</p>
+      <ul id="r-list" class="tree-view" role="listbox" aria-label="Reports"></ul>
+      <div class="buttons"><button type="button" id="r-new">New report</button><button type="button" id="r-open" disabled>Open</button><button type="button" data-close>Close</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="o-viewer" hidden>
+  <div class="window dialog wide" role="dialog" aria-modal="true" aria-labelledby="t-viewer">
+    <div class="title-bar"><div class="title-bar-text" id="t-viewer">Report</div>
+      <div class="title-bar-controls"><button aria-label="Close" data-close></button></div></div>
+    <div class="window-body">
+      <label for="v-text" class="sr">Report text</label>
+      <pre id="v-text" class="output" tabindex="0"></pre>
+      <div class="buttons"><button type="button" data-close class="default">Close</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="o-quit" hidden>
+  <div class="window dialog small" role="dialog" aria-modal="true" aria-labelledby="t-quit">
+    <div class="title-bar"><div class="title-bar-text" id="t-quit">Quit panic button</div>
+      <div class="title-bar-controls"><button aria-label="Close" data-close></button></div></div>
+    <div class="window-body">
+      <div class="msg"><span class="glyph q" aria-hidden="true">?</span><p>Keep guarding in the background?</p></div>
+      <div class="buttons"><button type="button" id="quit-yes" class="default">Yes</button><button type="button" id="quit-no">No</button><button type="button" data-close>Cancel</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="o-about" hidden>
+  <div class="window dialog small" role="dialog" aria-modal="true" aria-labelledby="t-about">
+    <div class="title-bar"><div class="title-bar-text" id="t-about">About panic button</div>
+      <div class="title-bar-controls"><button aria-label="Close" data-close></button></div></div>
+    <div class="window-body">
+      <div class="msg"><img src="icon.svg" alt="" width="48" height="48"><p><strong>panic button</strong><br>Locks your accounts in one press, and keeps watch while you are away.</p></div>
+      <div class="buttons"><button type="button" data-close class="default">OK</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="o-confirm" hidden>
+  <div class="window dialog small" role="alertdialog" aria-modal="true" aria-labelledby="t-confirm" aria-describedby="c-text">
+    <div class="title-bar"><div class="title-bar-text" id="t-confirm">panic button</div>
+      <div class="title-bar-controls"><button aria-label="Close" data-close></button></div></div>
+    <div class="window-body">
+      <div class="msg"><span class="glyph w" aria-hidden="true">!</span><p id="c-text"></p></div>
+      <div class="buttons"><button type="button" id="c-yes">Yes</button><button type="button" id="c-no" data-close>No</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="o-alert" hidden>
+  <div class="window dialog small" role="alertdialog" aria-modal="true" aria-labelledby="t-alert" aria-describedby="a-text">
+    <div class="title-bar"><div class="title-bar-text" id="t-alert">panic button</div>
+      <div class="title-bar-controls"><button aria-label="Close" data-close></button></div></div>
+    <div class="window-body">
+      <div class="msg"><span class="glyph e" aria-hidden="true">x</span><p id="a-text"></p></div>
+      <div class="buttons"><button type="button" data-close class="default">OK</button></div>
+    </div>
+  </div>
+</div>
+
+<div id="dev-banner" class="dev-banner" hidden>PREVIEW: fake data. Passphrase is "xp".</div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
