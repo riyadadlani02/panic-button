@@ -146,6 +146,9 @@ function renderHome() {
   $("st-guard").textContent = "Guard: " + (g.running ? "on" : g.stopping ? "stopping…" : g.error ? "stopped: " + g.error : "off");
   $("st-guard").title = $("st-guard").textContent;
   $("st-last").textContent = "Last check: " + (g.last_check ? fmt(g.last_check) : "never");
+  const relock = relockUntil(false);
+  $("st-relock").hidden = !relock;
+  if (relock) $("st-relock").textContent = "Re-locking pressed accounts until " + hhmm(relock);
   const n = questions.length || g.questions || 0;
   $("st-questions").textContent = String(n);
   $("st-questions").setAttribute("aria-label", n + " open questions");
@@ -239,7 +242,21 @@ async function guardStart() {
   if (!r.ok) alertBox(r.error || "The guard could not start.");
   await refresh();
 }
-async function guardStop() { const r = await api().guard_stop(); await refresh(); if (!r.ok) alertBox(r.error); }
+// A press made while the guard runs is re-locked only by the guard (and a watching job by itself): say what stopping costs.
+function relockUntil(withJob) {
+  if (withJob && job && !job.done && job.watchUntil) return job.watchUntil;
+  return S && S.guard.running && S.watch_until ? toDate(S.watch_until) : null;
+}
+const hhmm = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function stopsRelock(what, ask, withJob) {   // confirmBox focuses No, so Enter keeps re-locking
+  const u = relockUntil(withJob);
+  return u ? confirmBox(what + " also stops re-locking the accounts you pressed (until " + hhmm(u) + "). " + ask)
+           : Promise.resolve(true);
+}
+async function guardStop() {
+  if (!(await stopsRelock("Stopping the guard", "Stop it anyway?", false))) return;
+  const r = await api().guard_stop(); await refresh(); if (!r.ok) alertBox(r.error);
+}
 $("btn-guard-toggle").addEventListener("click", () => (S.guard.running ? guardStop() : guardStart()));
 
 /* ---------- quit ---------- */
@@ -256,6 +273,7 @@ function askQuit() {
 $("home-close").addEventListener("click", askQuit);
 async function quit(keep) {
   closeModal("o-quit");
+  if (!keep && !(await stopsRelock("Quitting", "Quit anyway?", true))) return;
   if (!keep) openModal("o-wait", "w-text");   // an in-flight press finishes before the app closes
   const r = await api().quit(keep);
   closeModal("o-wait");

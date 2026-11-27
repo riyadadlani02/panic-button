@@ -52,7 +52,7 @@
   }
 
   const api = {
-    state: () => Promise.resolve(JSON.parse(JSON.stringify(Object.assign({}, db, { questions: undefined, guard: Object.assign({}, db.guard, { questions: db.questions.length }) })))),
+    state: () => Promise.resolve(JSON.parse(JSON.stringify(Object.assign({}, db, { watch_until: db.watch_until > now() ? db.watch_until : null, questions: undefined, guard: Object.assign({}, db.guard, { questions: db.questions.length }) })))),
     unlock: async (pw) => { await sleep(150); if (pw === "xp") { db.unlocked = true; return { ok: true }; } return { ok: false, error: "That passphrase did not work." }; },
     forget_mac: () => { db.remember = false; return ok(); },
     start_job: (kind, extra) => {
@@ -61,6 +61,7 @@
       jobEvents = []; job = { cancelled: false, done: false, waiting: null };
       const watch = kind.startsWith("press") && !db.guard.running;  // the app's guard watches instead
       job.watched = watch;
+      if (kind.startsWith("press") && !watch) db.watch_until = Math.max(db.watch_until || 0, now() + 24 * 3600);
       runScript(job, watch ? SCRIPTS[kind].concat(WATCH) : SCRIPTS[kind]);
       return ok();
     },

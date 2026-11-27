@@ -94,7 +94,7 @@ def test_state_before_unlock_has_the_page_shape_and_no_accounts(app):
     s = app().state()
     assert s == {"unlocked": False, "vault_exists": True, "remember": True, "login_item": False, "notice": None,
                  "guard": {"running": False, "stopping": False, "last_check": None, "questions": 0, "error": None},
-                 "accounts": []}
+                 "watch_until": None, "accounts": []}
 
 
 def test_a_wrong_passphrase_stays_locked(app):
@@ -503,3 +503,29 @@ def test_a_missing_key_file_at_launch_is_said_on_the_unlock_screen(app, box):
     api._launch()
     s = api.state()
     assert not s["unlocked"] and "key file was not found" in s["notice"]
+
+
+def test_a_press_the_guard_watches_is_remembered_until_its_watch_ends(app, tmp_path):
+    api = app()
+    assert api.state()["watch_until"] is None
+    api.unlock(SECRET, False)
+    t = time.time()
+    assert api.start_job("press_all")["ok"]
+    done(api._runner.job)
+    until = api.state()["watch_until"]
+    assert t + 24 * 3600 <= until <= time.time() + 24 * 3600
+    assert app().state()["watch_until"] == until  # kept in the prefs across an app restart
+    prefs = tmp_path / "prefs.json"
+    prefs.write_text(json.dumps({**json.loads(prefs.read_text()), "watch_until": time.time() - 1}))
+    assert api.state()["watch_until"] is None  # passed: nothing to warn about
+
+
+def test_a_press_with_the_guard_off_keeps_its_own_watch_and_records_nothing(app):
+    api = app()
+    api.unlock(SECRET, False)
+    api.guard_stop()
+    assert api.start_job("press_all")["ok"]
+    wait_for(lambda: "Watching for" in "".join(e.get("text", "") for e in api._runner.job.events()))
+    api._runner.job.cancel()
+    done(api._runner.job)
+    assert api.state()["watch_until"] is None

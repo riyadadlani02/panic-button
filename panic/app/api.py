@@ -11,6 +11,7 @@ from panic import ask, notify
 from panic.app import keychain, login_item
 from panic.app.bridge import Busy
 from panic.app.guard_thread import GuardStopping, GuardThread
+from panic.session import WATCH_HOURS
 from panic.vault import VaultError
 
 CONTRACT = ("state", "unlock", "forget_mac", "start_job", "job_events", "job_answer", "job_cancel", "guard_start",
@@ -59,6 +60,7 @@ class Api:
                 "guard": {"running": bool(g and g.running), "stopping": bool(g and g.stopping),
                           "last_check": self._last_check, "questions": len(g.questions()) if g else 0,
                           "error": g.error if g else None},
+                "watch_until": until if (until := self._pref("watch_until", 0)) > time.time() else None,
                 "accounts": self._read_accounts()}
 
     @_says_errors
@@ -154,6 +156,8 @@ class Api:
         except Busy:  # a running setup keeps the passphrase it was given
             return {"ok": False, "error": "busy"}
         self._new_passphrase = None
+        if not watch:  # only the guard re-locks this press now: stopping it must warn, even after a restart
+            self._set_pref("watch_until", max(self._pref("watch_until", 0), time.time() + WATCH_HOURS * 3600))
         return {"ok": True}
 
     def job_events(self, since=0) -> list[dict]:
