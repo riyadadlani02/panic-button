@@ -272,23 +272,24 @@ class GitHub:
         if _is_org(a):
             q = quote(a.removeprefix("org:"), safe="")
             on = api.get(f"/orgs/{q}").get("two_factor_requirement_enabled")  # hidden from non-owners
-            link, paths = f"https://github.com/organizations/{q}/settings/security", [f"/orgs/{q}/actions/runners"]
+            link, paths = f"https://github.com/organizations/{q}/settings/security", lambda: [f"/orgs/{q}/actions/runners"]
             texts = ("The organisation requires two-factor authentication",
                      "The organisation does not require two-factor authentication",
                      "Could not read whether the organisation requires two-factor authentication")
         else:
             on = api.get("/user").get("two_factor_authentication")
             link = "https://github.com/settings/security"
-            paths = [f"/repos/{quote(r['full_name'], safe='/')}/actions/runners"
-                     for r in api.pages("/user/repos", {"affiliation": "owner", "per_page": 100})]
+            paths = lambda: [f"/repos/{quote(r['full_name'], safe='/')}/actions/runners"
+                             for r in api.pages("/user/repos", {"affiliation": "owner", "per_page": 100})]
             texts = ("Two-factor authentication is on", "Two-factor authentication is off",
                      "Could not read whether two-factor authentication is on")
         out = [Check(a, "two_factor", "good", texts[0]) if on
                else Check(a, "two_factor", "unknown" if on is None else "fix", texts[2 if on is None else 1], link)]
         # The guard reads these as "no runners", so a new one would go unseen.
         try:
+            paths = paths()
             hidden = sum(_runners_hidden(api, p) for p in paths)
-        except ApiError:
+        except Exception:  # a failed listing or read must not hide the 2FA result
             return [*out, Check(a, "runners", "unknown", "Could not read whether self-hosted runners can be read", TOKENS)]
         where = f"on {hidden} of {len(paths)} repositories" if not _is_org(a) else "in the organisation"
         out.append(Check(a, "runners", "unknown", f"Self-hosted runners cannot be read {where}: the token lacks admin "
@@ -300,11 +301,16 @@ class GitHub:
         org = _is_org(account.id)
         known = {i.split(":")[0] for i in baseline.get(PUBLIC, [])}
 
+        def scope(item: str) -> str:  # an organisation's runners share one scope
+            return "" if org else item.removeprefix("ephemeral ").split(":")[0]
+        # ponytail: on a scope that already autoscales, an attacker's ephemeral runner is not caught.
+        autoscaled = {scope(i) for i in baseline.get(RUNNERS, []) if i.startswith("ephemeral ")}
+
         def classify(cat: str, item: str) -> str | None:
             if cat == REPOS:
                 return None
-            if cat == RUNNERS:  # autoscaled runners register per job: harmless
-                return None if item.startswith("ephemeral ") else "runner_added"
+            if cat == RUNNERS:  # autoscaled runners register per job: harmless once the owner approved one there
+                return None if item.startswith("ephemeral ") and scope(item) in autoscaled else "runner_added"
             if cat == PUBLIC:  # a renamed public repository keeps its id
                 return None if item.split(":")[0] in known else "repo_made_public"
             if org:

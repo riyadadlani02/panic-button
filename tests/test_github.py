@@ -436,14 +436,32 @@ def test_a_renamed_public_repository_is_a_notice_not_a_trigger():
         ("changed", Severity.NOTICE)]
 
 
-def test_an_ephemeral_runner_is_harmless_and_old_baselines_still_match():
+def test_an_ephemeral_runner_triggers_until_the_scope_already_autoscales():
     api = personal_api()
     c = gh(api)
     base = c.snapshot(ME)
     assert base["runners"] == ["11:21: build-box"]  # unchanged format
-    api.lists["/repos/me/r/actions/runners"] = [
-        {"id": 21, "name": "build-box"}, {"id": 22, "name": "job [ephemeral]", "ephemeral": True}]
-    got = c.signals(ME, gh(api).snapshot(ME), base)
-    assert [(f.code, f.severity) for f in got] == [("changed", Severity.NOTICE)]
-    api.lists["/repos/me/r/actions/runners"].append({"id": 23, "name": "evil"})
-    assert [f.code for f in gh(api).signals(ME, gh(api).snapshot(ME), base)] == ["runner_added", "changed"]
+    eph = lambda i: {"id": i, "name": "job", "ephemeral": True}
+    api.lists["/repos/me/r/actions/runners"] = [{"id": 21, "name": "build-box"}, eph(22)]
+    assert "runner_added" in [f.code for f in gh(api).signals(ME, gh(api).snapshot(ME), base)]
+    base = gh(api).snapshot(ME)  # "It was me"
+    api.lists["/repos/me/r/actions/runners"].append(eph(23))
+    assert [(f.code, f.severity) for f in gh(api).signals(ME, gh(api).snapshot(ME), base)] == [
+        ("changed", Severity.NOTICE)]
+    api.lists["/repos/me/r/actions/runners"].append({"id": 24, "name": "evil"})
+    assert "runner_added" in [f.code for f in gh(api).signals(ME, gh(api).snapshot(ME), base)]
+    api.lists["/user/repos"].append({"id": 12, "full_name": "me/o", "private": True})  # another repo: no approval
+    api.lists["/repos/me/o/actions/runners"] = [eph(30)]
+    got = [f for f in gh(api).signals(ME, gh(api).snapshot(ME), base) if f.code == "runner_added"]
+    assert any("12:30" in i for i in got[0].items)
+
+
+def test_an_ephemeral_org_runner_triggers_until_the_org_already_autoscales():
+    api = personal_api()
+    org = {"org_webhooks": [], "outside_collaborators": [], "deploy_keys": [], "repositories": [],
+           "public_repositories": [], "runners": []}
+    c = gh(api)
+    assert [f.code for f in c.signals(ORG, {**org, "runners": ["ephemeral 31: x"]}, org)] == ["runner_added"]
+    base = {**org, "runners": ["ephemeral 31: x"]}
+    assert [f.code for f in c.signals(ORG, {**base, "runners": ["ephemeral 31: x", "ephemeral 32: y"]}, base)] == [
+        "changed"]

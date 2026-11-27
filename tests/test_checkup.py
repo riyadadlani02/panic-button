@@ -116,6 +116,11 @@ def test_github_rate_limit_is_a_read_error_not_missing_rights():
     assert statuses(checkup.posture(gh(api), ME)) == {"two_factor": "good", "runners": "unknown"}  # 2FA kept
 
 
+def test_github_posture_keeps_two_factor_when_the_repository_listing_fails():
+    api = GhApi({"/user/repos": ApiError(500, "")}, {"/user": {"two_factor_authentication": True}})
+    assert statuses(checkup.posture(gh(api), ME)) == {"two_factor": "good", "runners": "unknown"}
+
+
 def test_github_org_requirement_and_runners():
     api = GhApi({"/orgs/acme/actions/runners": []}, {"/orgs/acme": {"two_factor_requirement_enabled": False}})
     assert statuses(checkup.posture(gh(api), ORG)) == {"two_factor": "fix", "runners": "good"}
