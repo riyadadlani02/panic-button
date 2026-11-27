@@ -42,6 +42,7 @@ def cmd_guard(a) -> int:
         passes = 0
         dialogs: list[tuple] = []  # (process, keys it answers)
         asked: set[str] = set()
+        mark = {"t": 0.0}  # start of the latest pass
         state: dict = {"asks": {}}
         asking = a.wait > 0 and a.on_detect != "alert" and not a.dry_run
         print(f"Guarding every {a.interval:g}s, on detect: {a.on_detect}, wait: {a.wait:g}s"
@@ -59,8 +60,15 @@ def cmd_guard(a) -> int:
                         state["asks"][k]["answer"] = r
                         changed = True
             if changed:
-                s.update(lambda x: x.__setitem__("guard", state))
-            return changed or any(time.time() >= v["deadline"] for v in state["asks"].values())
+                try:
+                    s.update(lambda x: x.__setitem__("guard", state))
+                except Exception as e:  # unattended: a failed save must not end the protection
+                    msg = f"saving an answer failed ({type(e).__name__}: {e}); the guard is still running."
+                    a.notifier("panic: guard", msg)
+                    print(f"Guard: {msg}")
+                    return False
+            # only a deadline that fell due since the last pass began: an overdue one the pass already saw waits
+            return changed or any(mark["t"] < v["deadline"] <= time.time() for v in state["asks"].values())
 
         def pause() -> None:
             if not asking:
@@ -71,6 +79,7 @@ def cmd_guard(a) -> int:
                 if poll():
                     return
         while True:
+            mark["t"] = time.time()
             data = _reload(a, s, conns, data)
             s.data = data
             try:
@@ -91,7 +100,7 @@ def cmd_guard(a) -> int:
 
                 for acct in {v["account"] for v in state["asks"].values()}:  # reloaded questions get a dialog
                     old = {k: v for k, v in state["asks"].items() if v["account"] == acct and k not in asked
-                           and v["answer"] is None}
+                           and v["answer"] is None and v["deadline"] > time.time()}
                     if old:
                         dialog(acct, [TEXT.get(k.split("|")[1], k) for k in old], any(v["risky"] for v in old.values()),
                                list(old), min(v["deadline"] for v in old.values()))

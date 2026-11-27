@@ -47,3 +47,36 @@ def test_an_accept_answer_saves_the_new_baseline(guard):
         [Finding(acct.id, "forwarding_added", Severity.NOTICE, "Forwarding added.")] if snap != base else [])
     assert guard.run("--wait", "900", "--passes", "2", asker=Asker("accept")) == 0
     assert open_vault()["baselines"]["mail"] == {"forward": ["new@x.test"]} and test_cli.fake.ran == []
+
+
+def test_an_overdue_ask_on_an_unreadable_account_waits_for_the_interval(guard):
+    test_cli.fake.signals = lambda acct, snap, base: []
+    trigger("mail")
+    run(guard, Asker(None))
+    d = open_vault()
+    for v in d["guard"]["asks"].values():
+        v["deadline"] = 0
+    test_cli.vault.save(test_cli.vpath, d, test_cli.PW, test_cli.kpath.read_bytes())
+
+    def boom(account):
+        raise RuntimeError("down")
+
+    test_cli.fake.snapshot = boom
+    guard.sleeps.clear()
+    assert guard.run("--wait", "900", "--passes", "2", asker=Asker(None)) == 0
+    assert len(guard.sleeps) == 300
+
+
+def test_a_failed_save_of_an_answer_does_not_end_the_guard(guard, monkeypatch):
+    from panic.session import Session
+    trigger("mail")
+
+    class Breaking(Asker):
+        def answer(self, proc):
+            def fail(self, fn):
+                raise OSError("disk full")
+            monkeypatch.setattr(Session, "update", fail)
+            return "lock"
+
+    assert guard.run("--wait", "900", "--passes", "2", asker=Breaking(None)) == 0
+    assert any("saving an answer failed" in x for _, x in guard.notes)
