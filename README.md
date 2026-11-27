@@ -43,6 +43,23 @@ It suspends the account, resets the password to a random value nobody is told, r
 - On a personal account, sign-out, connected apps, app passwords, delegates, recovery and password are not watched, and forwarding is reported, not undone.
 - It does not clean malware or read mail content.
 
+These are not limits of a feature; they are attacks outside its reach. See the next section.
+
+## What panic button cannot stop
+
+- Theft at a vendor you already connected to, such as a data breach on their side.
+- Malware on your computer.
+- SIM swaps at the mobile carrier. Set a port-out PIN with them (`panic checkup` asks).
+- Wallet and seed-phrase scams: a seed phrase you gave away cannot be taken back.
+- iCloud: Apple has no API for it, so the tool cannot read or lock it.
+- Data copied in the first minutes, before any setting changes: the tool acts after the change, not before it.
+
+## Safety check-up
+
+`panic checkup` is a read-only audit. It reads each armed account (Workspace: 2-step verification; GitHub: two-factor and whether self-hosted runners can be read; personal Microsoft: inbox rules that forward) and asks five questions about things no API can see: a port-out PIN with your carrier, passkeys on your main email and bank, iCloud Advanced Data Protection, an offline copy of your photos, and a recovery contact. Results come in three groups: Fix now, Unknown, Good. A "no" or "unsure" answer counts as fix now. It changes nothing on any account. Only your answers are saved in the vault, and each is asked again after 90 days. `panic checkup --again` asks them all now.
+
+GitHub runners are watched only if the token has admin rights; otherwise the check-up and the guard report them as unreadable. A repository made public can be noticed up to an hour late, because the repository list is cached. A vault made before this change adopts the new GitHub categories on the first guard read (logged as `baseline_extended`), so anything already there at that moment is treated as already approved.
+
 Measured freeze time: Not yet measured; recorded during the live check.
 
 ## Run on a real account
@@ -202,10 +219,10 @@ It asks for the passphrase once, then reads every armed account that is not prot
 
 | Account | Trigger |
 |---|---|
-| Gmail, Workspace | A new filter that forwards, bins or deletes mail or skips the inbox (Workspace: forwarding only to an address outside your domain); a new forwarding address (Workspace: only outside your domain); POP switched on; on Workspace also a new delegate, changed recovery details, and a sign-in Google itself marks suspicious |
+| Gmail, Workspace | A new filter that forwards, bins or deletes mail or skips the inbox (Workspace: forwarding only to an address outside your domain); a new forwarding address (Workspace: only outside your domain); POP switched on; on Workspace also a new delegate, a new connected app, a new app password, changed recovery details, and a sign-in Google itself marks suspicious |
 | Microsoft 365 | A new inbox rule that forwards outside the tenant's domains or hides mail; a new app consent with a Mail, Files or full-access scope; a new authentication method; a risk detection Microsoft rates high |
 | Personal Microsoft | A new inbox rule that forwards to any address or hides mail |
-| GitHub | A new SSH, signing or GPG key; a new email address; a new deploy key, webhook, collaborator or invitation (an organisation: a new webhook, deploy key or outside collaborator) |
+| GitHub | A new SSH, signing or GPG key; a new email address; a new deploy key, webhook, collaborator or invitation; a repository created as public or made public; a new self-hosted runner (an organisation: a new webhook, deploy key, outside collaborator or runner) |
 | Slack | Enterprise Grid only: an `anomaly` or `user_logout_compromised` audit event for the member. On other plans, new IP addresses in the access log are a notice and nothing triggers |
 
 An ordinary filter (a label, a star) is a notice. A rule the tool cannot parse counts as one that hides mail. A finding is notified once; if it goes away and comes back, it is notified again. On GitHub a renamed or transferred repository is a notice, never a trigger: repository access is recorded by the repository's id.
@@ -249,8 +266,8 @@ Each question is about one item (one rule, one address), so a second item gets i
 | Google Workspace | Suspend, sign out, forwarding, connected apps, app passwords, backup codes, forwarding addresses, delegates, filters, IMAP and POP, recovery details, random password | None |
 | Microsoft 365 | Block sign-in (reapply); sign out of every session (no read-back); delete inbox rules outside the baseline (reapply); delete the user's own app consent grants outside the baseline (reapply) | Mailbox forwarding, mailbox delegates, password reset. Authentication methods are read and a new one triggers the guard, but none is removed. |
 | Personal Microsoft | Delete inbox rules outside the baseline (reapply) | Forwarding, sign-out, sign-in activity, connected apps, recovery phone and email, password |
-| GitHub account | Delete SSH, signing and GPG keys outside the baseline; delete emails outside the baseline (the primary address stays); delete deploy keys, webhooks, collaborators and invitations on repositories you own (all reapply) | Sign-out of sessions, personal access tokens (including the tool's own), connected apps, two-factor and recovery codes, password |
-| GitHub organisation | Delete webhooks, deploy keys and outside collaborators outside the baseline (reapply) | Members and owners: review and remove by hand |
+| GitHub account | Delete SSH, signing and GPG keys outside the baseline; delete emails outside the baseline (the primary address stays); delete deploy keys, webhooks, collaborators, invitations and self-hosted runners on repositories you own (all reapply). Public repositories and runners are watched; tokens are never revoked. | Sign-out of sessions, personal access tokens (including the tool's own), connected apps, two-factor and recovery codes, password |
+| GitHub organisation | Delete webhooks, deploy keys, outside collaborators and self-hosted runners outside the baseline (reapply) | Members and owners: review and remove by hand |
 | Slack Enterprise Grid | Sign the member out of every session; deactivate (reapply), which `release` reverses | Removing apps |
 | Slack Business+ | Deactivate (reapply), which `release` reverses | Removing apps |
 | Slack Pro, Free | None | Deactivate in the admin page, removing apps. `release` cannot reactivate. |
@@ -278,6 +295,7 @@ Global options: `--vault PATH` (default `~/.panic/panic.vault`), `--keyfile PATH
 | `arm --github LOGIN --token-file FILE [--org NAME]` | Arm a GitHub account, or an organisation you own. `--reconnect` replaces the token only. |
 | `arm --slack --token-file FILE` | Arm a Slack workspace; the plan is detected and the primary owner is protected. |
 | `arm --guided KEY --id LOGIN [--name NAME] [--link KIND=URL ...]` | Add a service with no API as a checklist. |
+| `checkup [--again]` | Read every armed account, ask five questions no API can answer, and list what to fix. Changes nothing on any account. `--again` asks every question again. |
 | `map` | Which account can reset which, and which to lock first. |
 | `rehearse` | Read every account, show what is outside its baseline, offer to approve it as the new baseline, ask whether to resume guarding each released account, and recompile the plan. Changes nothing in the accounts. |
 | `guard [--interval SECONDS] [--on-detect press\|contain\|alert] [--wait SECONDS] [--dry-run]` | Poll every armed account, ask you about a finding, and act on a risky one if nobody answers. Default every 300 seconds, minimum 30, default `press`. `--wait` is the time to answer, default 900 (15 minutes); `--wait 0` acts at once. |
