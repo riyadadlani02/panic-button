@@ -47,6 +47,7 @@ def cmd_guard(a) -> int:
         mark = {"t": 0.0}  # start of the latest pass
         state: dict = {"asks": {}}
         asking = a.wait > 0 and a.on_detect != "alert" and not a.dry_run
+        fate_word = "locked" if a.on_detect == "press" else "contained"
         print(f"Guarding every {a.interval:g}s, on detect: {a.on_detect}, wait: {a.wait:g}s"
               f"{' (dry run)' if a.dry_run else ''}. Ctrl-C to stop.")
 
@@ -93,7 +94,7 @@ def cmd_guard(a) -> int:
 
                 def dialog(acct: str, texts: list[str], risky: bool, keys: list[str], deadline: float) -> None:
                     asked.update(keys)
-                    fate = (f"it will be locked at {datetime.fromtimestamp(deadline):%H:%M}" if risky
+                    fate = (f"it will be {fate_word} at {datetime.fromtimestamp(deadline):%H:%M}" if risky
                             else f"it will be accepted at {datetime.fromtimestamp(deadline):%H:%M}")
                     proc = a.asker.open_dialog(f"panic: {acct}", "\n".join(texts) + f"\nIf you do not answer, {fate}.",
                                                deadline - time.time())
@@ -110,7 +111,7 @@ def cmd_guard(a) -> int:
                     for f in findings:
                         state["asks"][_key(f)]["text"] = shown(f)
                         s.log({"event": "guard_question", "account": acct, "code": f.code, "detail": shown(f)})
-                    fate = (f"It will be locked at {datetime.fromtimestamp(deadline):%H:%M} unless you answer."
+                    fate = (f"It will be {fate_word} at {datetime.fromtimestamp(deadline):%H:%M} unless you answer."
                             if risky else f"It will be accepted at {datetime.fromtimestamp(deadline):%H:%M} unless you answer.")
                     texts = list(dict.fromkeys(shown(f) for f in findings))  # org items share one text
                     a.notifier(f"panic: {acct}", " ".join(texts) + f" {fate} It was me? Run "

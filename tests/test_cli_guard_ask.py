@@ -109,3 +109,12 @@ def test_an_overdue_question_after_a_restart_acts_in_the_first_pass(guard):
     asker = Asker(None)
     run(guard, asker)
     assert open_vault()["outcomes"] and asker.opened == []
+
+
+def test_contain_mode_says_contained_not_locked(guard):
+    trigger("mail")
+    asker = Asker(None)
+    assert run(guard, asker, "--on-detect", "contain") == 0
+    text, note = asker.opened[0][1], guard.notes[0][1]
+    assert "contained at" in text and "locked" not in text
+    assert "contained at" in note and "will be locked" not in note
