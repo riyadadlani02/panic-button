@@ -48,7 +48,6 @@ These are not limits of a feature; they are attacks outside its reach. See the n
 ## What panic button cannot stop
 
 - Theft at a vendor you already connected to, such as a data breach on their side.
-- Malware on your computer.
 - SIM swaps at the mobile carrier. Set a port-out PIN with them (`panic checkup` asks).
 - Wallet and seed-phrase scams: a seed phrase you gave away cannot be taken back.
 - iCloud: Apple has no API for it, so the tool cannot read or lock it.
@@ -56,9 +55,9 @@ These are not limits of a feature; they are attacks outside its reach. See the n
 
 ## Safety check-up
 
-`panic checkup` is a read-only audit. It reads each armed account (Workspace: 2-step verification; GitHub: two-factor and whether self-hosted runners can be read; personal Microsoft: inbox rules that forward) and asks five questions about things no API can see: a port-out PIN with your carrier, passkeys on your main email and bank, iCloud Advanced Data Protection, an offline copy of your photos, and a recovery contact. Results come in three groups: Fix now, Unknown, Good. A "no" or "unsure" answer counts as fix now. It changes nothing on any account. Only your answers are saved in the vault, and each is asked again after 90 days. `panic checkup --again` asks them all now.
+`panic checkup` is a read-only audit. It reads each armed account (personal Gmail: POP and automatic forwarding; Workspace: 2-step verification; Microsoft 365: a second factor beyond SMS or voice; personal Microsoft: inbox rules that forward, with automatic forwarding shown as Unknown because it cannot be read; GitHub: two-factor and whether self-hosted runners can be read) and asks five questions about things no API can see: a port-out PIN with your carrier, passkeys on your main email and bank, iCloud Advanced Data Protection, an offline copy of your photos, and a recovery contact. Results come in three groups: Fix now, Unknown, Good. A "no" or "unsure" answer counts as fix now. It changes nothing on any account. Only your answers are saved in the vault, and each is asked again after 90 days. `panic checkup --again` asks them all now.
 
-GitHub runners are watched only if the token has admin rights; otherwise the check-up and the guard report them as unreadable. A repository made public can be noticed up to an hour late, because the repository list is cached. A vault made before this change adopts the new GitHub categories on the first guard read (logged as `baseline_extended`), so anything already there at that moment is treated as already approved.
+GitHub runners are watched only if the token has admin rights; otherwise the check-up and the guard report them as unreadable. A repository made public, or a runner added on one of your own repositories, can be noticed up to an hour late, because those reads are cached; organisation runners are read every pass. A vault made before this change adopts the new GitHub categories on the first guard read (logged as `baseline_extended`), so anything already there at that moment is treated as already approved.
 
 Measured freeze time: Not yet measured; recorded during the live check.
 
@@ -266,7 +265,7 @@ Each question is about one item (one rule, one address), so a second item gets i
 | Google Workspace | Suspend, sign out, forwarding, connected apps, app passwords, backup codes, forwarding addresses, delegates, filters, IMAP and POP, recovery details, random password | None |
 | Microsoft 365 | Block sign-in (reapply); sign out of every session (no read-back); delete inbox rules outside the baseline (reapply); delete the user's own app consent grants outside the baseline (reapply) | Mailbox forwarding, mailbox delegates, password reset. Authentication methods are read and a new one triggers the guard, but none is removed. |
 | Personal Microsoft | Delete inbox rules outside the baseline (reapply) | Forwarding, sign-out, sign-in activity, connected apps, recovery phone and email, password |
-| GitHub account | Delete SSH, signing and GPG keys outside the baseline; delete emails outside the baseline (the primary address stays); delete deploy keys, webhooks, collaborators, invitations and self-hosted runners on repositories you own (all reapply). Public repositories and runners are watched; tokens are never revoked. | Sign-out of sessions, personal access tokens (including the tool's own), connected apps, two-factor and recovery codes, password |
+| GitHub account | Delete SSH, signing and GPG keys outside the baseline; delete emails outside the baseline (the primary address stays); delete deploy keys, webhooks, collaborators, invitations and self-hosted runners on repositories you own (all reapply). Public repositories and runners are watched (runners only if the token has admin rights); tokens are never revoked. | Sign-out of sessions, personal access tokens (including the tool's own), connected apps, two-factor and recovery codes, password |
 | GitHub organisation | Delete webhooks, deploy keys, outside collaborators and self-hosted runners outside the baseline (reapply) | Members and owners: review and remove by hand |
 | Slack Enterprise Grid | Sign the member out of every session; deactivate (reapply), which `release` reverses | Removing apps |
 | Slack Business+ | Deactivate (reapply), which `release` reverses | Removing apps |
