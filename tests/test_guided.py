@@ -68,3 +68,26 @@ def test_custom_entry_with_bad_link_raises_naming_key_and_kind_not_url():
     with pytest.raises(ValueError) as e:
         Guided(bad)
     assert "shop" in str(e.value) and "apps" in str(e.value) and "evil.test" not in str(e.value)
+
+
+def test_card_freeze_and_fraud_steps_come_first_in_order():
+    entry = {"name": "Bank", "verified": True, "links": {"password": "https://b.test/p", "fraud_help": "https://b.test/f",
+                                                         "freeze_card": "https://b.test/c", "sign_out": "https://b.test/s"}}
+    steps = Guided({"bank": entry}).catalog(Account("bank:me", "guided"))
+    assert [s.action for s in steps] == ["freeze_card", "fraud_help", "sign_out", "password"]
+    assert steps[0].title == "Bank: freeze your cards" and all(s.phase is Phase.FREEZE for s in steps[:3])
+    assert steps[1].title == "Bank: report it to the fraud team, or call the number on the back of your card"
+
+
+def test_grouped_services_by_country_and_category_with_other_for_untagged():
+    from panic.guided import grouped_services
+    svc = {"x": {"links": {}}, "dropbox": {"country": "Global", "category": "cloud"},
+           "pp": {"country": "Global", "category": "payments"}, "hdfc": {"country": "India", "category": "banks"},
+           "sbi": {"country": "India", "category": "banks"}, "lloyds": {"country": "UK", "category": "banks"}}
+    assert grouped_services(svc) == ("India — banks: hdfc, sbi; UK — banks: lloyds; "
+                                     "Global — payments: pp; Cloud: dropbox; Other: x")
+
+
+def test_shipped_prompt_stays_short():
+    from panic.guided import grouped_services
+    assert len(grouped_services()) < 600

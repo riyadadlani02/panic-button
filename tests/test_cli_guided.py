@@ -72,3 +72,9 @@ def test_arm_refuses_a_guided_key_with_a_colon_or_space(armed, capsys):
     for key in ("my:shop", "my shop"):
         assert cli("arm", "--guided", key, "--id", "me", "--link", "password=https://x.test/p", answers=["y", ""]) == 1
     assert not any(a["provider"] == "guided" for a in open_vault()["accounts"])
+
+
+def test_arm_guided_accepts_card_freeze_and_fraud_links(armed):
+    assert cli("arm", "--guided", "mybank", "--id", "me@x.test", "--name", "My Bank",
+               "--link", "freeze_card=https://b.test/c", "--link", "fraud_help=https://b.test/f", answers=["y", "mail"]) == 0
+    assert set(open_vault()["credentials"]["guided"]["mybank"]["links"]) == {"freeze_card", "fraud_help"}

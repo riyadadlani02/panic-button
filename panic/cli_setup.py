@@ -5,7 +5,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from panic.guided import load_services
+from panic.guided import grouped_services, load_services
 from panic.session import CliError, _yes
 from panic.vault import VaultError
 
@@ -55,7 +55,7 @@ SERVICES = [
         "Save its token alone in a text file. Delete that file once armed.",
     ], ["https://api.slack.com/apps"], ["--slack"], [("--token-file", "Path to the token file", "file")]),
     ("other", "Another service (a checklist of links; nothing is read)", [], [], [],
-     [("--guided", "Which service (" + ", ".join(load_services()) + ")", "text"), ("--id", "Your login there", "text")]),
+     [("--guided", "Which service (" + grouped_services() + ")", "text"), ("--id", "Your login there", "text")]),
 ]
 
 

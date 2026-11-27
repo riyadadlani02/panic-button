@@ -65,3 +65,9 @@ def test_setup_asks_where_the_key_file_lives_when_none_is_given(armed, monkeypat
     with patch("getpass.getpass", return_value=test_cli.PW), patch("builtins.input", lambda prompt="": next(it)):
         assert main(["--vault", str(test_cli.vpath), "setup"], connectors={"fake": test_cli.fake}) == 0
     assert f"--keyfile {test_cli.kpath}" in capsys.readouterr().out
+
+
+def test_another_service_question_is_grouped():
+    from panic.guided import grouped_services
+    q = next(s for s in cli_setup.SERVICES if s[0] == "other")[5][0][1]
+    assert grouped_services() in q
