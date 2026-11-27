@@ -97,6 +97,6 @@ def test_guard_keeps_the_github_connector_and_its_cache_between_passes(armed, tm
     monkeypatch.setattr(github, "Api", lambda base, headers: api)
     reads = api.reads.count("/user/repos")
     with patch("getpass.getpass", return_value=test_cli.PW):
-        assert main(["--vault", str(test_cli.vpath), "--keyfile", str(test_cli.kpath), "guard", "--passes", "2"],
+        assert main(["--vault", str(test_cli.vpath), "--keyfile", str(test_cli.kpath), "guard", "--wait", "0", "--passes", "2"],
                     sleep=lambda s: None, notifier=lambda t, x: None) == 0
     assert len(made) == 1 and api.reads.count("/user/repos") == reads + 1

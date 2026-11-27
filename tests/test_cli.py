@@ -894,7 +894,7 @@ class Guard:
         self.sleeps, self.notes = [], []
 
     def run(self, *args, **kw):
-        return cli("guard", *args, answers=["y"] * 9, sleep=self.sleeps.append,
+        return cli("guard", "--wait", "0", *args, answers=["y"] * 9, sleep=self.sleeps.append,
                    notifier=lambda t, x: self.notes.append((t, x)), **kw)
 
 

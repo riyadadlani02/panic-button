@@ -183,7 +183,7 @@ def github(root: Path, check: Checks, ctx: dict) -> tuple[dict, list]:
         print(f"[intruder, between two guard passes] {fmt(added(before, attacked))}")
 
     n = len(v.notes)
-    _, lines = v.panic("guard", "--passes", "2", "--interval", "30", sleep=intruder)
+    _, lines = v.panic("guard", "--wait", "0", "--passes", "2", "--interval", "30", sleep=intruder)
     outcome, notes = press_story(v, lines, login, n)
     acts = actions_for(outcome, login)
     show_actions(acts)
@@ -197,7 +197,7 @@ def github(root: Path, check: Checks, ctx: dict) -> tuple[dict, list]:
     print("  Then the owner renames the repository, and the guard runs again.")
     new = lab.rename_repo(repo, "website-v2")
     n, presses = len(v.notes), len(v.data()["outcomes"])
-    _, lines = v.panic("guard", "--passes", "1")
+    _, lines = v.panic("guard", "--wait", "0", "--passes", "1")
     for x in guard_lines(lines):
         print(f"    {x if x.startswith('[') else 'guard: ' + x}")
     rename_notes = trigger_notes(v, login, n)
@@ -240,7 +240,7 @@ def outlook(root: Path, check: Checks, ctx: dict) -> tuple[dict, list]:
         print(f"[intruder, between two guard passes] {fmt(added(before, attacked))}")
 
     n = len(v.notes)
-    _, lines = v.panic("guard", "--passes", "2", "--interval", "30", sleep=intruder)
+    _, lines = v.panic("guard", "--wait", "0", "--passes", "2", "--interval", "30", sleep=intruder)
     outcome, notes = press_story(v, lines, addr, n)
     acts = actions_for(outcome, addr)
     show_actions(acts)
@@ -312,7 +312,7 @@ def microsoft_365(root: Path, check: Checks, ctx: dict) -> tuple[dict, list]:
         print(f"[intruder, between two guard passes] {fmt(added(before, attacked))}")
 
     n = len(v.notes)
-    _, lines = v.panic("guard", "--passes", "2", "--interval", "30", sleep=intruder)
+    _, lines = v.panic("guard", "--wait", "0", "--passes", "2", "--interval", "30", sleep=intruder)
     outcome, notes = press_story(v, lines, alex, n)
     acts = actions_for(outcome, alex)
     show_actions(acts)
@@ -330,7 +330,7 @@ def microsoft_365(root: Path, check: Checks, ctx: dict) -> tuple[dict, list]:
     print(f"  $ panic release --user {alex}: {lines[-1]}")
     extra.append(f"panic release: {lines[-1]}")
     check(lab.describe(alex)["Sign-in"] == ["allowed"], "M365 release did not restore sign-in")
-    _, lines = v.panic("guard", "--passes", "1")
+    _, lines = v.panic("guard", "--wait", "0", "--passes", "1")
     for x in guard_lines(lines):
         print(f"    {x if x.startswith('[') else 'guard: ' + x}")
     check(lab.describe(alex)["Sign-in"] == ["allowed"], "M365 watch locked a released user again")
@@ -340,7 +340,7 @@ def microsoft_365(root: Path, check: Checks, ctx: dict) -> tuple[dict, list]:
     _, lines = v.panic("rehearse", answers=["y"])
     print(f"  $ panic rehearse: answered yes to \"Resume guarding {alex}?\"")
     check(alex not in v.data().get("unguarded", []), "M365 rehearse did not resume guarding")
-    _, lines = v.panic("guard", "--passes", "1")
+    _, lines = v.panic("guard", "--wait", "0", "--passes", "1")
     for x in guard_lines(lines):
         print(f"    {x if x.startswith('[') else 'guard: ' + x}")
     extra.append(f"panic rehearse resumed guarding; next guard pass: {guard_lines(lines)[-1]}")
@@ -386,7 +386,7 @@ def workspace(root: Path, check: Checks, ctx: dict) -> tuple[dict, list]:
         print(f"[intruder on kim, and lee's own change, between two guard passes] {fmt(added(before, attacked))}")
 
     n = len(v.notes)
-    _, lines = v.panic("guard", "--passes", "2", "--interval", "30", sleep=intruder)
+    _, lines = v.panic("guard", "--wait", "0", "--passes", "2", "--interval", "30", sleep=intruder)
     outcome, notes = press_story(v, lines, kim, n)
     lee_notes = trigger_notes(v, lee, n)
     for t in lee_notes:
@@ -439,7 +439,7 @@ def slack(root: Path, check: Checks, ctx: dict) -> tuple[dict, list]:
               f"Slack logs an `anomaly` audit event for {ana}")
 
     n = len(v.notes)
-    _, lines = v.panic("guard", "--passes", "2", "--interval", "30", sleep=intruder)
+    _, lines = v.panic("guard", "--wait", "0", "--passes", "2", "--interval", "30", sleep=intruder)
     outcome, notes = press_story(v, lines, ids[0], n)
     acts = actions_for(outcome, ids[0])
     show_actions(acts)

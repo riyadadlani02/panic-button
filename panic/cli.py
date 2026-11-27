@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from panic import cli_setup, executor, google_personal, log, microsoft_personal, notify, report
+from panic import ask, cli_setup, executor, google_personal, log, microsoft_personal, notify, report
 from panic.cli_arm import _plan_lines, cmd_arm, cmd_rehearse
 from panic.cli_guard import cmd_guard
 from panic.graph import lock_order, resetters
@@ -292,6 +292,8 @@ def _parser() -> argparse.ArgumentParser:
     g.add_argument("--interval", type=float, default=300, metavar="SECONDS", help="seconds between passes (min 30)")
     g.add_argument("--on-detect", choices=["press", "contain", "alert"], default="press")
     g.add_argument("--dry-run", action="store_true", help="read and report; notify, press and save nothing")
+    g.add_argument("--wait", type=float, default=900, metavar="SECONDS",
+                   help="ask first and press only after this long without an answer; 0 presses at once")
     g.add_argument("--passes", type=int, default=0, help=argparse.SUPPRESS)
     add("watch", cmd_watch, "Resume the 24-hour watch after a press.")
     rel = add("release", cmd_release, "Lift the lock on one organisation account: Workspace unsuspends it with a "
@@ -306,13 +308,13 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, connectors: dict | None = None, authorize=None, whoami=None,
-         ms_authorize=None, sleep=time.sleep, notifier=notify.notify) -> int:
+         ms_authorize=None, sleep=time.sleep, notifier=notify.notify, asker=None) -> int:
     try:
         a = _parser().parse_args(argv)
         a.connectors, a.authorize = connectors, authorize or google_personal.authorize
         a.whoami = whoami or google_personal.signed_in_address
         a.ms_authorize = ms_authorize or microsoft_personal.authorize
-        a.sleep, a.notifier = sleep, notifier
+        a.sleep, a.notifier, a.asker = sleep, notifier, asker or ask
         return a.fn(a)
     except SystemExit as e:  # --help, or a usage error already printed
         return int(e.code or 0)

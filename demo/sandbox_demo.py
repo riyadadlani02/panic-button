@@ -146,7 +146,7 @@ def demo():
         sim.state[MAIL]["forwarding"].append("thief3@evil.test")
         print("\n[attacker adds forwarding to thief3@evil.test while the guard sleeps]")
 
-    rc = panic("guard", "--passes", "2", "--interval", "30", sleep=attacker_between_passes,
+    rc = panic("guard", "--wait", "0", "--passes", "2", "--interval", "30", sleep=attacker_between_passes,
                notifier=lambda title, text: print(f"[notification] {title}: {text}"))
     print("\nState after the guard:", sim.state[MAIL])
     outcomes = vault.load(vpath, "demo passphrase", key)["outcomes"]
