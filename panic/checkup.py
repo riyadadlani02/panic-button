@@ -42,9 +42,10 @@ def posture(conn, account) -> list[Check]:
         return [Check(account.id, "read", "unknown", f"Could not read this account: {str(e) or type(e).__name__}")]
 
 
-def ask(saved: dict, now: float, again: bool) -> dict:
-    """Answers for the items not answered in the last DAYS days (every item with `again`)."""
-    out = {}
+def ask(saved: dict, now: float, again: bool, out: dict | None = None) -> dict:
+    """Answers for the items not answered in the last DAYS days (every item with `again`).
+    Each answer lands in `out` as given, so a caller keeps them if input ends early."""
+    out = {} if out is None else out
     for key, question, *_ in CHECKLIST:
         if again or key not in saved or now - saved[key]["at"] >= DAYS * 86400:
             while (answer := ANSWERS.get(input(f"{question} [y/n/u] ").strip().lower())) is None:

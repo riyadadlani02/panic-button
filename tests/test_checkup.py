@@ -113,7 +113,7 @@ def test_github_runners_without_admin_rights_are_unknown_with_token_link(err):
 def test_github_rate_limit_is_a_read_error_not_missing_rights():
     limited = ApiError(403, "API rate limit exceeded", headers={"x-ratelimit-remaining": "0"})
     api = GhApi({**REPOS, "/repos/me/r/actions/runners": limited}, {"/user": {"two_factor_authentication": True}})
-    assert unknown_only(checkup.posture(gh(api), ME), "me")
+    assert statuses(checkup.posture(gh(api), ME)) == {"two_factor": "good", "runners": "unknown"}  # 2FA kept
 
 
 def test_github_org_requirement_and_runners():
@@ -204,6 +204,11 @@ def test_checklist_is_not_reasked_within_90_days_but_is_after(armed, capsys):
     assert run(now=T0 + 91 * DAY) == 1  # due again
     assert run(answers=("y",) * len(ALL_NO), now=T0 + 91 * DAY) == 0
     assert {v["answer"] for v in open_vault()["checkup"].values()} == {"yes"}
+
+
+def test_eof_after_two_answers_keeps_those_two(armed):
+    assert run(answers=("y", "n")) == 1
+    assert [v["answer"] for v in open_vault()["checkup"].values()] == ["yes", "no"]
 
 
 def test_again_reasks(armed):

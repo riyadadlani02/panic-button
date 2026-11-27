@@ -154,6 +154,7 @@ def _runners(api, path, make):
     try:
         return _read_list(api, path, lambda r: (make(r), (f"{path}/{r['id']}", None)), {"per_page": 100}, "runners")
     except ApiError as e:
+        # ponytail: a hidden read reads as no runners; if the token loses and regains admin rights, an accepted baseline can drop the owner's runner — re-arm after changing token rights.
         if _no_admin(e):  # no admin rights there: none we can see
             return []
         raise
@@ -169,12 +170,16 @@ def _runners_hidden(api, path) -> bool:
     return False
 
 
+def _eph(r) -> str:
+    return "ephemeral " if r.get("ephemeral") else ""  # a prefix: a runner's name must not be able to fake it
+
+
 def _repo_runners(api, repo, rid):
-    return _runners(api, f"/repos/{repo}/actions/runners", lambda r: f"{rid}:{r['id']}: {r['name']}")
+    return _runners(api, f"/repos/{repo}/actions/runners", lambda r: f"{_eph(r)}{rid}:{r['id']}: {r['name']}")
 
 
 def _org_runners(api, org):
-    return _runners(api, f"/orgs/{org}/actions/runners", lambda r: f"{r['id']}: {r['name']}")
+    return _runners(api, f"/orgs/{org}/actions/runners", lambda r: f"{_eph(r)}{r['id']}: {r['name']}")
 
 
 _REPO_READERS = {"deploy_keys": _repo_deploy_keys, "webhooks": _repo_webhooks, "collaborators": _repo_collaborators,
@@ -281,7 +286,10 @@ class GitHub:
         out = [Check(a, "two_factor", "good", texts[0]) if on
                else Check(a, "two_factor", "unknown" if on is None else "fix", texts[2 if on is None else 1], link)]
         # The guard reads these as "no runners", so a new one would go unseen.
-        hidden = sum(_runners_hidden(api, p) for p in paths)
+        try:
+            hidden = sum(_runners_hidden(api, p) for p in paths)
+        except ApiError:
+            return [*out, Check(a, "runners", "unknown", "Could not read whether self-hosted runners can be read", TOKENS)]
         where = f"on {hidden} of {len(paths)} repositories" if not _is_org(a) else "in the organisation"
         out.append(Check(a, "runners", "unknown", f"Self-hosted runners cannot be read {where}: the token lacks admin "
                          "rights, so the guard would not see a new one", TOKENS) if hidden
@@ -290,12 +298,15 @@ class GitHub:
 
     def signals(self, account: Account, snapshot: Snapshot, baseline: Snapshot) -> list[Finding]:
         org = _is_org(account.id)
+        known = {i.split(":")[0] for i in baseline.get(PUBLIC, [])}
 
         def classify(cat: str, item: str) -> str | None:
             if cat == REPOS:
                 return None
-            if cat in (PUBLIC, RUNNERS):
-                return "repo_made_public" if cat == PUBLIC else "runner_added"
+            if cat == RUNNERS:  # autoscaled runners register per job: harmless
+                return None if item.startswith("ephemeral ") else "runner_added"
+            if cat == PUBLIC:  # a renamed public repository keeps its id
+                return None if item.split(":")[0] in known else "repo_made_public"
             if org:
                 return "org_access_added"
             return "key_added" if cat in KEY_CATS else "email_added" if cat == "emails" else "repo_access_added"

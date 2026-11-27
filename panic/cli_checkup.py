@@ -5,9 +5,12 @@ from panic.session import Session, _connectors
 
 def run(a) -> int:
     s = Session(a)
-    answers = checkup.ask(s.data.get("checkup", {}), a.now(), a.again)
-    if answers:
-        s.update(lambda d: d.setdefault("checkup", {}).update(answers))
+    answers: dict = {}
+    try:
+        checkup.ask(s.data.get("checkup", {}), a.now(), a.again, answers)
+    finally:  # Ctrl-D keeps what was answered
+        if answers:
+            s.update(lambda d: d.setdefault("checkup", {}).update(answers))
     conns = _connectors(a, s.data, s)
     checks = [c for acct in s.accounts for c in checkup.posture(conns.get(acct.provider), acct)]
     print(checkup.render(checks + checkup.checklist(s.data.get("checkup", {}))))

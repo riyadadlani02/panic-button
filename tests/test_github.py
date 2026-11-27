@@ -425,3 +425,25 @@ def test_a_rate_limited_repository_list_fails_and_caches_nothing():
         c.snapshot(ME)
     api.lists["/user/repos"] = good
     assert c.snapshot(ME)["repositories"] == ["11: me/r"]
+
+
+def test_a_renamed_public_repository_is_a_notice_not_a_trigger():
+    api = personal_api()
+    api.lists["/user/repos"] = [{"id": 11, "full_name": "me/r", "private": False}]
+    base = gh(api).snapshot(ME)
+    api.lists["/user/repos"] = [{"id": 11, "full_name": "me/renamed", "private": False}]
+    assert [(f.code, f.severity) for f in gh(api).signals(ME, gh(api).snapshot(ME), base)] == [
+        ("changed", Severity.NOTICE)]
+
+
+def test_an_ephemeral_runner_is_harmless_and_old_baselines_still_match():
+    api = personal_api()
+    c = gh(api)
+    base = c.snapshot(ME)
+    assert base["runners"] == ["11:21: build-box"]  # unchanged format
+    api.lists["/repos/me/r/actions/runners"] = [
+        {"id": 21, "name": "build-box"}, {"id": 22, "name": "job [ephemeral]", "ephemeral": True}]
+    got = c.signals(ME, gh(api).snapshot(ME), base)
+    assert [(f.code, f.severity) for f in got] == [("changed", Severity.NOTICE)]
+    api.lists["/repos/me/r/actions/runners"].append({"id": 23, "name": "evil"})
+    assert [f.code for f in gh(api).signals(ME, gh(api).snapshot(ME), base)] == ["runner_added", "changed"]
