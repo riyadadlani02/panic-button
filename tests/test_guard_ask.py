@@ -191,3 +191,62 @@ def test_lock_on_a_harmless_question_passes_its_finding():
 def test_a_new_question_prints_a_line():
     lines = run(conn([TRIG]), new_state())[0]
     assert "ask mail: x It will be pressed at 14:01:40 unless you answer." in lines
+
+
+HIDE = Finding("mail", "forwarding_added", Severity.TRIGGER, "y", ("evil@x",))
+
+
+def test_a_risky_item_toggled_off_and_on_is_acted_on_by_its_first_deadline():
+    state, c = new_state(), conn()
+    for i in range(48):  # on 10 minutes, off 5, read every 5 minutes
+        c.findings = [TRIG] if i % 3 != 2 else []
+        if run(c, state, 1e6 + 300 * i)[1]:
+            break
+    assert 1e6 + 300 * i <= 1e6 + 900 + 300
+
+
+def test_two_risky_codes_alternating_are_acted_on_by_the_first_deadline():
+    state, c = new_state(), conn()
+    for i in range(48):
+        c.findings = [TRIG] if i % 2 else [HIDE]
+        if run(c, state, 1e6 + 300 * i)[1]:
+            break
+    assert 1e6 + 300 * i == 1e6 + 900
+
+
+def test_the_floor_expires_after_a_quiet_cooldown():
+    from panic.guard import COOLDOWN_S
+    state, c = new_state(), conn([TRIG])
+    run(c, state)
+    c.findings = []
+    run(c, state, 1e6 + 300)
+    assert state["floors"] == {"mail": 1e6 + 900}
+    t = 1e6 + 900 + COOLDOWN_S + 1
+    run(c, state, t)
+    c.findings = [HIDE]
+    _, acts, *_ = run(c, state, t + 300)
+    assert acts == [] and state["floors"] == {} and state["asks"][_key(HIDE)]["deadline"] == t + 300 + 900
+
+
+def test_an_accept_clears_the_floor_and_a_refused_one_keeps_it():
+    for extra, cleared in (([], True), ([OTHER], False)):
+        state, c = new_state(), conn([TRIG])
+        run(c, state)
+        c.findings = [NOTICE]
+        run(c, state, 1e6 + 300)
+        state["asks"][_key(NOTICE)]["answer"] = "accept"
+        c.findings = [NOTICE, *extra]
+        run(c, state, 1e6 + 600)
+        assert ("mail" not in state["floors"]) == cleared
+
+
+def test_a_cooling_account_drops_its_questions_and_asks_again_after_the_cooldown():
+    from panic.guard import COOLDOWN_S
+    state, c = new_state(), conn([TRIG])
+    run(c, state)
+    state["pressed"]["mail"] = 1e6 + 10  # pressed as downstream of another account
+    run(c, state, 1e6 + 20)
+    assert state["asks"] == {}
+    t = 1e6 + 10 + COOLDOWN_S + 1
+    _, acts, asked, _ = run(c, state, t)
+    assert acts == [] and len(asked) == 1 and state["asks"][_key(TRIG)]["deadline"] == t + 900

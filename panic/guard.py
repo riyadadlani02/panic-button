@@ -15,8 +15,9 @@ EVENTS_KEPT_S = 48 * 3600
 
 
 def new_state() -> dict:
-    # seen and events_seen: key -> when it was last notified or read.
-    return {"seen": {}, "cursors": {}, "pressed": {}, "events_seen": {}, "failed": [], "asks": {}}
+    # seen and events_seen: key -> when it was last notified or read. floors: account -> the deadline of a
+    # risky question that vanished unanswered, so a change that disappears and comes back keeps it.
+    return {"seen": {}, "cursors": {}, "pressed": {}, "events_seen": {}, "failed": [], "asks": {}, "floors": {}}
 
 
 def load_state(raw: dict | None) -> dict:
@@ -72,11 +73,13 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
     read = found = skipped = 0
     verb = "would " if dry_run else ""
     t = now()
-    seen, events_seen, asks = state["seen"], state["events_seen"], state["asks"]
+    seen, events_seen, asks, floors = state["seen"], state["events_seen"], state["asks"], state["floors"]
     asking = wait > 0 and mode != "alert"
     if not dry_run:
         for k in [k for k, at in events_seen.items() if at < t - EVENTS_KEPT_S]:
             del events_seen[k]
+        for k in [k for k, at in floors.items() if t > at + COOLDOWN_S]:
+            del floors[k]
 
     def cooling(i: str) -> bool:
         pressed = state["pressed"].get(i)
@@ -155,6 +158,7 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
         findings = [by_key.get(k) or _from_ask(k, v) for k, v in mine.items() if v["risky"] or v["answer"] == "lock"]
         for k in mine:
             del asks[k]
+        floors.pop(acct.id, None)
         handle(acct, findings)
         return True
 
@@ -162,16 +166,17 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
         nonlocal found
         snap_found, triggers, ev = _per_item(snap_found), _per_item(triggers), _per_item(ev)
         mine = {k: v for k, v in asks.items() if v["account"] == acct.id}
-        # a replaced item keeps the earliest deadline of its code, so toggling items never postpones the press
-        first = {}
-        for k, v in mine.items():
-            if v["risky"] and v["answer"] is None:
-                code = _from_ask(k, v).code
-                first[code] = min(first.get(code, v["deadline"]), v["deadline"])
+        # a new risky question keeps the account's earliest open or vanished deadline, so toggling an item
+        # or swapping one kind of change for another never postpones the press
+        first = min([v["deadline"] for v in mine.values() if v["risky"] and v["answer"] is None]
+                    + [floors.get(acct.id, float("inf"))])
         in_read = {_key(f) for f in snap_found}
         for k, v in mine.items():  # gone from a full read, or an event answered / harmless and out of time
-            if (not v["event"] and k not in in_read) or (v["event"] and (
-                    v["answer"] == "accept" or (not v["risky"] and t >= v["deadline"]))):
+            if not v["event"] and k not in in_read:
+                if v["risky"] and v["answer"] is None:
+                    floors[acct.id] = min(floors.get(acct.id, v["deadline"]), v["deadline"])
+                del asks[k]
+            elif v["event"] and (v["answer"] == "accept" or (not v["risky"] and t >= v["deadline"])):
                 del asks[k]
         mine = {k: v for k, v in mine.items() if k in asks}
         current = [f for f in snap_found if f.severity == Severity.NOTICE] + triggers + [
@@ -179,11 +184,12 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
         fresh = [f for f in current if _key(f) not in asks]
         for f in fresh:
             risky = f.severity == Severity.TRIGGER
-            deadline = min(t + wait, first.get(f.code, t + wait)) if risky else t + wait
+            deadline = min(t + wait, first) if risky else t + wait
             asks[_key(f)] = mine[_key(f)] = {"account": acct.id, "risky": risky, "event": f in ev,
                                               "deadline": deadline, "answer": None}
             fate = ("pressed" if mode == "press" else "contained") if risky else "accepted"
             lines.append(f"ask {acct.id}: {f.text} It will be {fate} at {_hms(deadline)} unless you answer.")
+        fresh = [f for f in fresh if mine[_key(f)]["deadline"] > t]  # an overdue one acts below, unasked
         if fresh and ask is not None:
             ask(acct.id, fresh, min(mine[_key(f)]["deadline"] for f in fresh))
         if act_if_due(acct, mine, {_key(f): f for f in current}):
@@ -201,6 +207,8 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
                 if accept is not None:
                     accept(acct.id, snap)
                 baselines[acct.id] = snap
+                if any(asks[k]["answer"] == "accept" for k in keep):  # "It was me", not a silent harmless accept
+                    floors.pop(acct.id, None)
                 for k in keep:
                     del asks[k]
 
@@ -213,6 +221,10 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
             continue
         read += 1
         asking_now = asking and not cooling(acct.id)  # a pressed account is left to the watch, as before
+        if cooling(acct.id) and not dry_run:  # its open questions are moot and must not act when the cooldown ends
+            for k in [k for k, v in asks.items() if v["account"] == acct.id]:
+                del asks[k]
+            floors.pop(acct.id, None)
         try:
             snap, snap_found = _read(conn, acct, baselines.get(acct.id)) if has_signals else (None, [])
         except Exception:  # includes the fail-closed missing baseline
