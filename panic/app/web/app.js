@@ -62,7 +62,7 @@ function closeModal(id) {
   if (top) { const t = $(top).querySelector("button.default") || $(top).querySelector("button"); if (t) t.focus(); }
   else if (rec && rec.from && document.contains(rec.from) && !rec.from.hidden) rec.from.focus();
 }
-function closable(id) { return id !== "o-wait" && (id !== "o-job" || !job || job.done); }
+function closable(id) { return id !== "o-wait" && (id !== "o-job" || !job || job.done || !!job.watchUntil); }
 document.addEventListener("click", (e) => {
   if (e.target.closest("[data-close]")) {
     const o = e.target.closest(".overlay");
@@ -124,6 +124,7 @@ function renderUnlock() {
   $("btn-setup").hidden = has;
   $("unlock-intro").textContent = has ? "Enter your passphrase to open panic button."
     : "No vault found on this Mac yet. Set one up to get started.";
+  if (S.notice && !$("unlock-error").textContent) $("unlock-error").textContent = S.notice;
   if (!stack.length && !job_running() && document.activeElement === document.body) (has ? $("pass") : $("btn-setup")).focus();
 }
 
@@ -142,7 +143,8 @@ function renderHome() {
   const sel = S.accounts.find((a) => a.id === selected);
   $("btn-lock-one").disabled = !sel;
   $("btn-release").disabled = !(sel && sel.kind === "guarded");
-  $("st-guard").textContent = "Guard: " + (g.running ? "on" : g.stopping ? "stopping…" : "off");
+  $("st-guard").textContent = "Guard: " + (g.running ? "on" : g.stopping ? "stopping…" : g.error ? "stopped: " + g.error : "off");
+  $("st-guard").title = $("st-guard").textContent;
   $("st-last").textContent = "Last check: " + (g.last_check ? fmt(g.last_check) : "never");
   const n = questions.length || g.questions || 0;
   $("st-questions").textContent = String(n);
@@ -223,7 +225,7 @@ menubar.addEventListener("keydown", (e) => {
 async function doAct(act) {
   if (act === "lock") { clientLocked = true; stateSig = ""; closeAll(); render(); }
   else if (act === "forget") { const r = await api().forget_mac(); await refresh(); alertBox(r.ok ? "This Mac will ask for the passphrase next time." : r.error); }
-  else if (act === "quit") openModal("o-quit");
+  else if (act === "quit") askQuit();
   else if (act === "add") startJob("setup");
   else if (act === "guard-start") guardStart();
   else if (act === "guard-stop") guardStop();
@@ -241,7 +243,17 @@ async function guardStop() { const r = await api().guard_stop(); await refresh()
 $("btn-guard-toggle").addEventListener("click", () => (S.guard.running ? guardStop() : guardStart()));
 
 /* ---------- quit ---------- */
-$("home-close").addEventListener("click", () => openModal("o-quit"));
+// Called by Python too, when the window's close button or Cmd-Q is used.
+function askQuit() {
+  const guarding = !!(S && S.guard && S.guard.running);
+  $("quit-text").textContent = guarding ? "Keep guarding in the background?" : "Quit panic button?";
+  $("quit-yes").hidden = !guarding;
+  $("quit-yes").classList.toggle("default", guarding);
+  $("quit-no").textContent = guarding ? "No" : "Quit";
+  $("quit-no").classList.toggle("default", !guarding);
+  openModal("o-quit");
+}
+$("home-close").addEventListener("click", askQuit);
 async function quit(keep) {
   closeModal("o-quit");
   if (!keep) openModal("o-wait", "w-text");   // an in-flight press finishes before the app closes
@@ -290,17 +302,19 @@ async function answerQ(handle, ans) {
 
 /* ---------- jobs ---------- */
 function job_running() { return job && !job.done; }
+const BUSY = "Another task is still running. Wait for it to finish, then try again.";
+const busyText = () => job && job.watchUntil ? "panic button is still watching after the press. Open it from the status bar and choose Stop watching first." : BUSY;
 async function startJob(kind, extra = null) {
-  if (job_running()) { alertBox("Another task is still running. Wait for it to finish, then try again."); return; }
+  if (job_running()) { alertBox(busyText()); return; }
   let r;
   try { r = await api().start_job(kind, extra); } catch (err) { r = { ok: false, error: "Could not reach the app." }; }
-  if (!r.ok) { alertBox(r.error === "busy" ? "Another task is still running. Wait for it to finish, then try again." : (r.error || "That could not be started.")); return; }
-  job = { kind, since: 0, done: false, promptId: null, cancelled: false };
+  if (!r.ok) { alertBox(r.error === "busy" ? busyText() : (r.error || "That could not be started.")); return; }
+  job = { kind, since: 0, done: false, promptId: null, cancelled: false, watchUntil: null };
   $("job-out").textContent = "";
   $("t-job").textContent = JOB_TITLES[kind] || "Task";
   $("job-status").textContent = "Working…";
   $("job-prompt").hidden = true;
-  $("job-cancel").hidden = false; $("job-cancel").disabled = false;
+  $("job-cancel").hidden = false; $("job-cancel").disabled = false; $("job-cancel").textContent = "Cancel";
   $("job-close").hidden = true; $("job-again").hidden = true; $("job-x").disabled = true;
   openModal("o-job", "job-cancel");
   pollJob(job);
@@ -317,7 +331,7 @@ async function pollJob(j) {
   j.since += events.length;
   let pending = null;
   for (const ev of events) {
-    if (ev.type === "output") out(ev.text);
+    if (ev.type === "output") { out(ev.text); const w = /Watching for ([\d.]+) more hours/.exec(ev.text); if (w) watching(j, +w[1]); }
     else if (ev.type === "prompt") pending = ev;
     else if (ev.type === "done") { pending = null; finishJob(j, ev.code); }
   }
@@ -325,10 +339,23 @@ async function pollJob(j) {
   if (pending && pending.id !== j.promptId) showPrompt(j, pending);
   setTimeout(() => pollJob(j), 300);
 }
+// The press is over; its 24-hour watch keeps running here, so the dialog may close.
+function watching(j, hours) {
+  j.watchUntil = new Date(Date.now() + hours * 3600e3);
+  const until = j.watchUntil.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  $("job-status").textContent = "The press is done. Watching until " + until + "; you can close this window.";
+  $("job-cancel").textContent = "Stop watching";
+  $("job-close").hidden = false; $("job-x").disabled = false;
+  $("st-watch-btn").textContent = "Watching after the press (until " + until + ")";
+  $("st-watch").hidden = false;
+}
+$("st-watch-btn").addEventListener("click", () => openModal("o-job"));
 function finishJob(j, code) {
   j.done = true;
+  $("st-watch").hidden = true;
   $("job-prompt").hidden = true; $("jp-input").value = "";
-  $("job-status").textContent = j.cancelled ? "Stopped. Exit status " + code + "." : code === 0 ? "Finished. Exit status 0." : "Finished with a problem. Exit status " + code + ".";
+  $("job-status").textContent = j.watchUntil ? (j.cancelled ? "Watch stopped. The press itself finished." : "The 24-hour watch has ended.")
+    : j.cancelled ? "Stopped. Exit status " + code + "." : code === 0 ? "Finished. Exit status 0." : "Finished with a problem. Exit status " + code + ".";
   $("job-cancel").hidden = true;
   $("job-close").hidden = false; $("job-x").disabled = false;
   $("job-again").hidden = !(j.kind === "checkup" || j.kind === "checkup_again");
@@ -392,7 +419,7 @@ function showPrompt(j, p) {
 }
 $("job-cancel").addEventListener("click", async () => {
   if (!job || job.done) return;
-  if (!(await confirmBox("Stop this job?"))) return;
+  if (!(await confirmBox(job.watchUntil ? "Stop watching these accounts?" : "Stop this job?"))) return;
   if (job.done) return;
   job.cancelled = true; $("job-cancel").disabled = true;
   $("job-status").textContent = "Stopping…";

@@ -5,7 +5,9 @@
   const now = () => Date.now() / 1000;
   const db = {
     unlocked: false, vault_exists: !new URLSearchParams(location.search).has("novault"), remember: true, login_item: false,
-    guard: { running: false, stopping: false, last_check: null, questions: 0 },
+    notice: new URLSearchParams(location.search).has("nokey") ? "The key file was not found at /Volumes/KEY/panic.key. Plug in the drive that holds it, then try again." : null,
+    guard: { running: false, stopping: false, last_check: null, questions: 0,
+             error: new URLSearchParams(location.search).has("guarderror") ? "RuntimeError: token store broken" : null },
     accounts: [
       { id: "you@gmail.com", provider: "google", kind: "guarded" },
       { id: "octo", provider: "github", kind: "guarded" },
@@ -29,11 +31,13 @@
     report: ["Writing report ...\n", "Saved press-2026-11-28-1005.txt\n"],
   };
   SCRIPTS.checkup_again = SCRIPTS.checkup;
+  const WATCH = ["Watching for 24.0 more hours. Press Ctrl-C to stop; resume with `panic watch`.\n", { wait: true }, "Watch stopped. Resume with `panic watch`.\n"];
 
   async function runScript(j, steps) {
     for (const s of steps) {
-      if (j.cancelled) break;
+      if (j.cancelled && !s.wait) break;
       await sleep(250);
+      if (s.wait) { await new Promise((r) => { j.waiting = { id: -1, r }; }); j.waiting = null; continue; }
       if (typeof s === "string") s.split("\n").forEach((line, i, all) => { if (line) jobEvents.push({ type: "output", text: line }); if (i < all.length - 1) jobEvents.push({ type: "output", text: "\n" }); });
       else {
         const id = ++pid;
@@ -42,8 +46,8 @@
         j.waiting = null;
       }
     }
-    if (j.cancelled) jobEvents.push({ type: "output", text: "Cancelled.\n" });
-    jobEvents.push({ type: "done", code: j.cancelled ? 1 : 0 });
+    if (j.cancelled && !j.watched) jobEvents.push({ type: "output", text: "Cancelled.\n" });
+    jobEvents.push({ type: "done", code: j.cancelled && !j.watched ? 1 : 0 });
     j.done = true;
   }
 
@@ -55,14 +59,16 @@
       if (job && !job.done) return Promise.resolve({ ok: false, error: "busy" });
       if (!SCRIPTS[kind]) return Promise.resolve({ ok: false, error: "unknown job" });
       jobEvents = []; job = { cancelled: false, done: false, waiting: null };
-      runScript(job, SCRIPTS[kind]);
+      const watch = kind.startsWith("press") && !db.guard.running;  // the app's guard watches instead
+      job.watched = watch;
+      runScript(job, watch ? SCRIPTS[kind].concat(WATCH) : SCRIPTS[kind]);
       return ok();
     },
     job_events: (since) => Promise.resolve(jobEvents.slice(since)),
     job_answer: (id, value) => { if (job && job.waiting && job.waiting.id === id) { job.waiting.r(); return Promise.resolve(true); } return Promise.resolve(false); },
     job_cancel: () => { if (job) { job.cancelled = true; if (job.waiting) job.waiting.r(); } return ok(); },
-    guard_start: () => { db.guard.running = true; db.guard.last_check = now(); if (!db.questions.length) db.questions.push({ handle: "q1", account: "octo", text: "A new sign-in from Lagos was seen. Was that you?", deadline: now() + 900 }); return ok(); },
-    guard_stop: () => { db.guard.running = false; return ok(); },
+    guard_start: () => { db.guard.running = true; db.guard.error = null; db.guard.last_check = now(); if (!db.questions.length) db.questions.push({ handle: "q1", account: "octo", text: "A new sign-in from Lagos was seen. Was that you?", deadline: now() + 900 }); return ok(); },
+    guard_stop: () => { db.guard.running = false; db.questions = []; return ok(); },
     questions: () => Promise.resolve(JSON.parse(JSON.stringify(db.questions))),
     answer_question: (h) => { db.questions = db.questions.filter((q) => q.handle !== h); return Promise.resolve(true); },
     reports: () => Promise.resolve([{ name: "press-2026-11-20-0815.txt", when: "2026-11-20T08:15:00" }, { name: "press-2026-11-27-0912.txt", when: "2026-11-27T09:12:00" }]),

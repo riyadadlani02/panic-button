@@ -30,7 +30,7 @@ class Guard:
     def __init__(self, vault, keyfile, passphrase, on_question, on_notice, press_lock, now, **kw):
         self.on_question, self.now, self.press_lock = on_question, now, press_lock
         self.running = self.stopping = False
-        self.code, self.output, self.open, self.answers = None, [], [], []
+        self.code, self.error, self.output, self.open, self.answers = None, None, [], [], []
 
     def start(self):
         self.running = True
@@ -92,8 +92,9 @@ def test_only_the_contract_is_public(app):
 
 def test_state_before_unlock_has_the_page_shape_and_no_accounts(app):
     s = app().state()
-    assert s == {"unlocked": False, "vault_exists": True, "remember": True, "login_item": False,
-                 "guard": {"running": False, "stopping": False, "last_check": None, "questions": 0}, "accounts": []}
+    assert s == {"unlocked": False, "vault_exists": True, "remember": True, "login_item": False, "notice": None,
+                 "guard": {"running": False, "stopping": False, "last_check": None, "questions": 0, "error": None},
+                 "accounts": []}
 
 
 def test_a_wrong_passphrase_stays_locked(app):
@@ -144,7 +145,7 @@ def test_launch_with_a_stale_keychain_entry_stays_locked(app, box):
 
 
 class Rec(Runner):
-    def start(self, argv):
+    def start(self, argv, **kw):
         self.argvs = getattr(self, "argvs", []) + [argv]
         self.job = Job([])
         self.job.done = True
@@ -392,3 +393,113 @@ def test_the_api_keeps_no_copy_of_the_passphrase(app):
     api = app()
     api.unlock(SECRET, False)
     assert SECRET not in [v for v in vars(api).values() if isinstance(v, str)]
+
+
+# -- final review --
+
+def test_stopping_the_guard_closes_its_mac_dialogs(app, box):
+    from test_app_bridge import trigger
+
+    class Open(Ask):
+        def __init__(self):
+            super().__init__(None)
+            self.closed = []
+
+        def close(self, proc):
+            self.closed.append(proc)
+    trigger(box[2])
+    ask = Open()
+    api = app(ask=ask, guard=GuardThread, connectors={"fake": box[2]})
+    api.unlock(SECRET, False)
+    h = wait_for(api.questions)[0]["handle"]
+    api.quit(True)
+    wait_for(lambda: ask.opened)
+    api.guard_stop()
+    wait_for(lambda: ask.closed == [1])
+    assert api.questions() == [] and api.answer_question(h, "lock") is False
+
+
+def test_a_guard_that_dies_shows_in_the_state(app, box, monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("token store broken")
+    monkeypatch.setattr("panic.cli_guard._connectors", broken)
+    api = app(guard=GuardThread, connectors={"fake": box[2]})
+    api.unlock(SECRET, False)
+    wait_for(lambda: api.state()["guard"]["error"] == "RuntimeError: token store broken")
+
+
+class Gate:
+    def __init__(self, fn):
+        self.fn, self.entered, self.open = fn, threading.Event(), threading.Event()
+
+    def __call__(self, *a):
+        self.entered.set()
+        self.open.wait(10)
+        return self.fn(*a)
+
+
+def quitter(api, seen):
+    def destroy():
+        seen.append(api)
+    api._window.destroy = destroy
+    t = threading.Thread(target=api.quit, args=(False,), daemon=True)
+    t.start()
+    return t
+
+
+def test_quit_waits_for_a_slow_guard_pass_and_never_leaves_an_account_marked_unpressed(app, box):
+    from test_app_bridge import load, trigger
+
+    class Quick(GuardThread):
+        def stop(self, timeout=0.2):
+            return super().stop(timeout)
+    trigger(box[2])
+    api = app(guard=Quick, connectors={"fake": box[2]})
+    api.unlock(SECRET, False)
+    g = api.guards[0]
+    h = wait_for(api.questions)[0]["handle"]
+    box[2].catalog = gate = Gate(box[2].catalog)  # the pass is between saving `pressed` and pressing
+    api.answer_question(h, "lock")
+    gate.entered.wait(5)
+    seen = []
+    t = quitter(api, seen)
+    time.sleep(0.8)
+    assert seen == []
+    gate.open.set()
+    t.join(5)
+    assert seen and not g._alive
+    d = load(box)
+    assert d["guard"]["pressed"] == {} or box[2].ran
+
+
+def test_quit_waits_for_a_press_job_to_end(app, box):
+    api = app()
+    api.unlock(SECRET, False)
+    box[2].run = gate = Gate(box[2].run)
+    api.start_job("press_all")
+    gate.entered.wait(5)
+    job, seen = api._runner.job, []
+    t = quitter(api, seen)
+    time.sleep(0.3)
+    gate.open.set()
+    t.join(10)
+    assert seen and job.done
+
+
+def test_an_app_press_skips_the_job_watch_while_the_guard_runs(app):
+    api = app()
+    api.unlock(SECRET, False)
+    assert api.state()["guard"]["running"]
+    assert api.start_job("press_all")["ok"]
+    job = api._runner.job
+    assert done(job)["code"] == 0 and "Watching for" not in "".join(
+        e["text"] for e in job.events() if e["type"] == "output")
+
+
+def test_a_missing_key_file_at_launch_is_said_on_the_unlock_screen(app, box):
+    api = app()
+    keychain.set(box[0], SECRET, app.keyring)
+    box[1].unlink()
+    api._launch()
+    s = api.state()
+    assert not s["unlocked"] and "key file was not found" in s["notice"]

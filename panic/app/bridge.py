@@ -169,10 +169,10 @@ class Runner:
     def _secret(self, text: str) -> str | None:
         return self._passphrase if text.startswith("Passphrase") else None  # "Choose a passphrase" goes to the page
 
-    def start(self, argv: list[str]) -> Job:
+    def start(self, argv: list[str], **main_kwargs) -> Job:
         with self._starting:
             if self.job and not self.job.done:
                 raise Busy("busy")
             self.job = Job(["--vault", self.vault, "--keyfile", self.keyfile, *argv], secret=self._secret,
-                           press_lock=self.press_lock, **self._kw)
+                           press_lock=self.press_lock, **self._kw, **main_kwargs)
             return self.job.start()

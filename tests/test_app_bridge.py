@@ -266,3 +266,61 @@ def test_start_after_a_failed_stop_never_shows_the_guard_on(box):
     g.start()
     assert g.running and not g.stopping
     assert g.stop()
+
+
+# -- final review --
+
+def test_after_stop_no_question_is_listed_or_answered(box):
+    trigger(box[2])
+    g = GuardThread(box[0], box[1], SECRET, connectors={"fake": box[2]})
+    g.start()
+    q = wait_for(g.questions)[0]
+    assert g.stop()
+    assert g.questions() == [] and g.answer(q["handle"], "lock") is False
+    g.start()  # the vault reopens it
+    assert wait_for(g.questions)[0]["text"] == q["text"]
+    assert g.stop()
+
+
+def test_a_guard_that_dies_says_so(box, monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("token store broken")
+    monkeypatch.setattr("panic.cli_guard._connectors", broken)
+    notes = []
+    g = GuardThread(box[0], box[1], SECRET, on_notice=lambda t, x: notes.append((t, x)), connectors={"fake": box[2]})
+    g.start()
+    wait_for(lambda: not g.running and notes)
+    assert g.error == "RuntimeError: token store broken"
+    assert notes == [("panic: guard", "The guard stopped: RuntimeError: token store broken. "
+                                      "Open panic button to start it.")]
+    monkeypatch.undo()
+    g.start()
+    assert g.running and g.error is None
+    assert g.stop() and g.error is None and len(notes) == 1  # a stop asked for is not news
+
+
+def test_a_dropped_press_is_unmarked_before_anyone_is_told(box):
+    trigger(box[2])
+    lock = threading.Lock()
+
+    def notify(title, text):
+        if "stopped before pressing" in text:
+            raise RuntimeError("osascript hung")
+    g = GuardThread(box[0], box[1], SECRET, press_lock=lock, on_notice=notify, connectors={"fake": box[2]})
+    g.start()
+    q = wait_for(g.questions)[0]
+    with lock:
+        g.answer(q["handle"], "lock")
+        time.sleep(1.5)
+        g.stop()
+    wait_for(lambda: not g.stopping)
+    assert load(box)["guard"]["pressed"] == {} and box[2].ran == []
+
+
+def test_an_app_press_can_skip_the_watch_and_still_watches_by_default(box):
+    job = runner(box).start(["press", "--all"], watch=False)
+    assert done(job)["code"] == 0 and box[2].ran and "Watching for" not in text(job)
+    job = runner(box).start(["press", "--all"])
+    wait_for(lambda: "Watching for" in text(job))
+    job.cancel()
+    done(job)

@@ -71,6 +71,7 @@ class GuardThread:
         self._thread: threading.Thread | None = None
         self.output: collections.deque[str] = collections.deque(maxlen=2000)
         self.code: int | None = None
+        self.error: str | None = None  # why the guard ended when nobody stopped it
 
     @property
     def _alive(self) -> bool:
@@ -93,21 +94,26 @@ class GuardThread:
             if self._alive:
                 raise GuardStopping("The guard is still finishing a pass; start it again in a moment.")
         self._stop.clear()
-        self.code = None
+        self.code = self.error = None
         with self._asker._lock:  # a new run reopens its questions from the vault
             self._asker.open.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self, timeout: float = 3) -> bool:
-        """True once the guard has ended. A pass in progress finishes first."""
-        self._stop.set()
+        """True once the guard has ended. A pass in progress finishes first; its questions close now and reopen
+        from the vault on the next start, since nothing would read an answer given meanwhile."""
+        with self._asker._lock:
+            self._stop.set()
+            self._asker.open.clear()
         if self._thread:
             self._thread.join(timeout)
         return not self._alive
 
     def questions(self) -> list[dict]:
         with self._asker._lock:
+            if not self.running:
+                return []
             return [self._asker.shown(q) for q in self._asker.open.values()
                     if q["answer"] is None and q["deadline"] > time.time()]
 
@@ -116,7 +122,7 @@ class GuardThread:
             raise ValueError(f"answer must be one of {', '.join(ANSWERS)}")
         with self._asker._lock:
             q = self._asker.open.get(handle)
-            if q is None or q["answer"] is not None or q["deadline"] <= time.time():
+            if not self.running or q is None or q["answer"] is not None or q["deadline"] <= time.time():
                 return False
             q["answer"] = value
             return True
@@ -126,10 +132,18 @@ class GuardThread:
             raise KeyboardInterrupt
 
     def _run(self) -> None:
-        with routed(self):
-            self.code = cli.main(["--vault", self.vault, "--keyfile", self.keyfile, "guard"], asker=self._asker,
-                                 notifier=self.on_notice, sleep=self._sleep,
-                                 press_lock=_StoppableLock(self.press_lock, self._stop), **self._kw)
+        try:
+            with routed(self):
+                self.code = cli.main(["--vault", self.vault, "--keyfile", self.keyfile, "guard"], asker=self._asker,
+                                     notifier=self.on_notice, sleep=self._sleep,
+                                     press_lock=_StoppableLock(self.press_lock, self._stop), **self._kw)
+        except Exception as e:
+            self.output.append(f"{type(e).__name__}: {e}\n")
+        finally:
+            if not self._stop.is_set():  # ended on its own: the owner thinks it still guards
+                lines = "".join(self.output).strip().splitlines()
+                self.error = lines[-1].removeprefix("error: ").rstrip(".") if lines else "it ended"
+                self.on_notice("panic: guard", f"The guard stopped: {self.error}. Open panic button to start it.")
 
     # -- handler, called on the guard's thread --
 

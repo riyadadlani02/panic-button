@@ -162,7 +162,10 @@ def cmd_guard(a) -> int:
                         with contextlib.ExitStack() as held:
                             try:
                                 held.enter_context(a.press_lock)
-                            except KeyboardInterrupt:  # stopped before pressing: say so, and no cooldown for it
+                            except KeyboardInterrupt:  # stopped before pressing: no cooldown for it, then say so
+                                for x in targets:
+                                    state["pressed"].pop(x, None)
+                                _guard("un-mark the dropped press", save)  # before a notifier that may hang or fail
                                 who = ", ".join(targets)
                                 msg = (f"stopped before pressing {who}; run `panic press "
                                        + " ".join(f"--user {x}" for x in targets) + "`.")
@@ -170,9 +173,6 @@ def cmd_guard(a) -> int:
                                 _guard("log the dropped press", lambda: s.log(
                                     {"event": "guard_notice", "account": who, "code": "press_dropped", "detail": msg}))
                                 a.notifier(f"panic: {who}", msg)
-                                for x in targets:
-                                    state["pressed"].pop(x, None)
-                                save()
                                 raise
                             out = executor.press(plan, accounts, edges, conns, data["baselines"], lambda step: False,
                                                  s.log, progress=_warn, checkpoint=checkpoint)

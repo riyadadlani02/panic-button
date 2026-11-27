@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'">
 <title>panic button</title>
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="vendor/xp.css">
@@ -96,6 +96,7 @@
     <p class="status-bar-field" id="st-guard">Guard: off</p>
     <p class="status-bar-field" id="st-last">Last check: never</p>
     <p class="status-bar-field">Questions: <button type="button" class="link" id="st-questions">0</button></p>
+    <p class="status-bar-field" id="st-watch" hidden><button type="button" class="link" id="st-watch-btn"></button></p>
   </div>
 </main>
 
@@ -115,7 +116,7 @@
 <div class="overlay" id="o-job" hidden>
   <div class="window dialog job" role="dialog" aria-modal="true" aria-labelledby="t-job">
     <div class="title-bar"><div class="title-bar-text" id="t-job">Task</div>
-      <div class="title-bar-controls"><button aria-label="Close" id="job-x" disabled></button></div></div>
+      <div class="title-bar-controls"><button aria-label="Close" id="job-x" data-close disabled></button></div></div>
     <div class="window-body">
       <label for="job-out" class="sr">Output</label>
       <pre id="job-out" class="output" tabindex="0"></pre>
@@ -168,7 +169,7 @@
     <div class="title-bar"><div class="title-bar-text" id="t-quit">Quit panic button</div>
       <div class="title-bar-controls"><button aria-label="Close" data-close></button></div></div>
     <div class="window-body">
-      <div class="msg"><span class="glyph q" aria-hidden="true">?</span><p>Keep guarding in the background?</p></div>
+      <div class="msg"><span class="glyph q" aria-hidden="true">?</span><p id="quit-text">Keep guarding in the background?</p></div>
       <div class="buttons"><button type="button" id="quit-yes" class="default">Yes</button><button type="button" id="quit-no">No</button><button type="button" data-close>Cancel</button></div>
     </div>
   </div>
@@ -200,7 +201,7 @@
   <div class="window dialog small" role="alertdialog" aria-modal="true" aria-labelledby="t-wait" aria-describedby="w-text">
     <div class="title-bar"><div class="title-bar-text" id="t-wait">Quit panic button</div></div>
     <div class="window-body">
-      <div class="msg"><span class="glyph q" aria-hidden="true">i</span><p id="w-text" tabindex="-1">Finishing the press…</p></div>
+      <div class="msg"><span class="glyph q" aria-hidden="true">i</span><p id="w-text" tabindex="-1">Finishing the guard's pass and any press…</p></div>
     </div>
   </div>
 </div>

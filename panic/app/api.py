@@ -45,6 +45,7 @@ class Api:
         self._asked: set = set()  # questions with a macOS dialog open
         self._remember, self._hidden, self._quitting = True, False, False
         self._last_check = None
+        self._notice = None  # said on the unlock screen, e.g. a key file missing at launch
         self._accounts, self._accounts_from = [], None
         self._lock = threading.Lock()
 
@@ -54,9 +55,10 @@ class Api:
         self._after_setup()
         g = self._guard
         return {"unlocked": self._runner.unlocked, "vault_exists": self._vault.exists(), "remember": self._remember,
-                "login_item": login_item.installed(self._home),
+                "login_item": login_item.installed(self._home), "notice": self._notice,
                 "guard": {"running": bool(g and g.running), "stopping": bool(g and g.stopping),
-                          "last_check": self._last_check, "questions": len(g.questions()) if g else 0},
+                          "last_check": self._last_check, "questions": len(g.questions()) if g else 0,
+                          "error": g.error if g else None},
                 "accounts": self._read_accounts()}
 
     @_says_errors
@@ -68,9 +70,8 @@ class Api:
         except OSError as e:
             if Path(self._runner.keyfile).exists():
                 return {"ok": False, "error": f"Could not open the vault: {e.strerror or e}"}
-            return {"ok": False, "error": f"The key file was not found at {self._runner.keyfile}. "
-                                          "Plug in the drive that holds it, then try again."}
-        self._remember = bool(remember)
+            return {"ok": False, "error": self._no_key()}
+        self._remember, self._notice = bool(remember), None
         out = {"ok": True}
         try:
             if self._remember:
@@ -88,9 +89,15 @@ class Api:
         self._remember = False
         return {"ok": True}
 
+    def _no_key(self) -> str:
+        return f"The key file was not found at {self._runner.keyfile}. Plug in the drive that holds it, then try again."
+
     def _launch(self) -> None:
         """At start: unlock silently from the Keychain, and guard unless the owner switched the guard off."""
         if not self._vault.exists():
+            return
+        if not Path(self._runner.keyfile).exists():
+            self._notice = self._no_key()
             return
         try:
             pw = keychain.get(self._vault, self._keyring)
@@ -140,8 +147,10 @@ class Api:
             return {"ok": False, "error": "unknown job"}
         if not self._runner.unlocked and kind != "setup":
             return {"ok": False, "error": "Unlock panic button first."}
+        # A running guard re-applies the press on every pass; the job's own 24-hour watch would hold the window.
+        watch = kind not in ("press_all", "press_user") or not (self._guard and self._guard.running)
         try:
-            self._runner.start(argv)
+            self._runner.start(argv, watch=watch)
         except Busy:  # a running setup keeps the passphrase it was given
             return {"ok": False, "error": "busy"}
         self._new_passphrase = None
@@ -283,11 +292,16 @@ class Api:
                 self._dialog(q)
             self._window.hide()
             return {"ok": True}
-        if self._runner.job:
-            self._runner.job.cancel()
+        job = self._runner.job
+        if job:
+            job.cancel()
         if self._guard:
-            self._guard.stop()
-        # ponytail: waits as long as an in-flight press takes; the guard's own lock wait ends on the stop
+            while not self._guard.stop():  # a pass ends only between steps, so a quit never cuts one short
+                pass
+        # ponytail: waits as long as an in-flight press takes. Other jobs (setup may wait on a browser sign-in) are
+        # only cancelled, so quit never hangs on them.
+        while job and not job.done and job.argv[4] in ("press", "release"):
+            time.sleep(0.1)
         with self._runner.press_lock:
             self._quitting = True  # only now may the window close: a second close before this would kill the press
             self._window.destroy()
@@ -304,7 +318,7 @@ class Api:
             return True
         if self._hidden:
             self._show()
-        threading.Thread(target=self._window.evaluate_js, args=("openModal('o-quit')",), daemon=True).start()
+        threading.Thread(target=self._window.evaluate_js, args=("askQuit()",), daemon=True).start()
         return False
 
     def _pref(self, key, default):
