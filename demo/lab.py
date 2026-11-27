@@ -84,14 +84,16 @@ class GitHubLab:
     def get(self, path: str, params=None):
         return {"login": self.login} if path == "/user" else _not_found(path)
 
-    def pages(self, path: str, params=None) -> list:
+    def pages(self, path: str, params=None, key=None) -> list:
         own = {"/user/keys": self.keys, "/user/ssh_signing_keys": self.signing_keys, "/user/gpg_keys": self.gpg_keys,
                "/user/emails": self.emails}
         if path in own:
             return [dict(x) for x in own[path]]
         if path == "/user/repos":
-            return [{"id": i, "full_name": r["full_name"]} for i, r in self.repos.items()]
+            return [{"id": i, "full_name": r["full_name"], "private": True} for i, r in self.repos.items()]
         repo, kind, _ = self._repo_path(path)
+        if kind == "actions":  # no self-hosted runners in this lab
+            return []
         if kind == "collaborators":  # GitHub lists the owner as a collaborator of their own repository
             return [{"login": c} for c in repo["collaborators"]]
         return [dict(x) for x in repo[kind]] if kind in ("keys", "hooks", "invitations") else _not_found(path)

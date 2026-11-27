@@ -100,3 +100,26 @@ def test_guard_keeps_the_github_connector_and_its_cache_between_passes(armed, tm
         assert main(["--vault", str(test_cli.vpath), "--keyfile", str(test_cli.kpath), "guard", "--wait", "0", "--passes", "2"],
                     sleep=lambda s: None, notifier=lambda t, x: None) == 0
     assert len(made) == 1 and api.reads.count("/user/repos") == reads + 1
+
+
+def test_guard_adopts_categories_an_old_baseline_lacks_once_and_keeps_guarding(armed, tmp_path, monkeypatch):
+    import json
+    from unittest.mock import patch
+
+    import test_cli
+    from panic import github, vault
+    from panic.cli import main
+    api = personal_api()
+    api.objs["/user"] = {"login": "me"}
+    assert arm(tmp_path, api) == 0
+    d = test_cli.open_vault()
+    for cat in ("public_repositories", "runners"):  # a vault armed before these were watched
+        del d["baselines"]["me"][cat]
+    vault.save(test_cli.vpath, d, test_cli.PW, test_cli.kpath.read_bytes())
+    monkeypatch.setattr(github, "Api", lambda base, headers: api)
+    with patch("getpass.getpass", return_value=test_cli.PW):
+        assert main(["--vault", str(test_cli.vpath), "--keyfile", str(test_cli.kpath), "guard", "--wait", "0",
+                     "--passes", "2"], sleep=lambda s: None, notifier=lambda t, x: None) == 0
+    events = [json.loads(ln)["event"] for ln in test_cli.log_path.read_text().splitlines()]
+    assert events.count("baseline_extended") == 1 and "guard_notice" not in events and "guard_trigger" not in events
+    assert test_cli.open_vault()["baselines"]["me"]["runners"] == ["11:21: build-box"]

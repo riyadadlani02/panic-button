@@ -29,3 +29,8 @@ def test_drift_matches_baseline_returns_nothing():
 def test_drift_fails_closed_without_a_baseline_category():
     with pytest.raises(KeyError, match="no baseline recorded for filters on a@x"):
         drift("a@x", {}, {"filters": ["k"]}, lambda c, i: None)
+
+def test_adopted_is_only_the_categories_the_baseline_lacks():
+    from panic.signals import adopted
+    assert adopted({"old": ["a"]}, {"old": ["a", "b"], "new": ["n"]}) == {"new": ["n"]}
+    assert adopted({"old": []}, {"old": ["x"]}) == {}

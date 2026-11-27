@@ -65,6 +65,15 @@ def test_pages_follows_next_link_until_exhausted():
     assert all(r.get_header("Authorization") == "Bearer secret" for r in s.requests)
 
 
+def test_pages_can_take_the_list_from_a_wrapping_object():
+    a, s, _ = api(Resp(b'{"total_count": 3, "runners": [1, 2]}', headers={"Link": f'<{BASE}/items?page=2>; rel="next"'}),
+                  Resp(b'{"runners": [3]}'))
+    assert a.pages("/items", key="runners") == [1, 2, 3]
+    a, s, _ = api(Resp(b'{"other": []}'))
+    with pytest.raises(ApiError):
+        a.pages("/items", key="runners")
+
+
 def test_429_sleeps_retry_after_then_succeeds():
     a, s, sleeps = api(err(429, headers={"Retry-After": "3"}), Resp(b'{"ok": true}'))
     assert a.get("/x") == {"ok": True} and sleeps == [3.0] and len(s.requests) == 2

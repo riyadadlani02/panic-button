@@ -113,12 +113,15 @@ class Api:
                 return url[1:]
         return None
 
-    def pages(self, path: str, params: dict | None = None) -> list:
+    def pages(self, path: str, params: dict | None = None, key: str | None = None) -> list:
+        """Every page's list; `key` names it when each page wraps it in an object."""
         url, out, seen = self._url(path, params), [], set()
         while url and url not in seen:  # a server that loops its own Link must not loop us
             seen.add(url)
             hdrs, raw = self._fetch("GET", url)
             page = self._json(raw)
+            if key is not None:
+                page = page.get(key) if isinstance(page, dict) else None
             if not isinstance(page, list):
                 raise ApiError(200, _decode(raw), "expected a list")
             out += page

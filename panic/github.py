@@ -20,15 +20,21 @@ REPO_CATS = ("deploy_keys", "webhooks", "collaborators", "invitations")
 ORG_CATS = ("org_webhooks", "outside_collaborators", "deploy_keys")
 # "<id>: <owner/name>", so names stay visible; no step touches it and a change there is only a notice.
 REPOS = "repositories"
-SNAPSHOT_CATS = {False: (*KEY_CATS, "emails", REPOS, *REPO_CATS), True: (*ORG_CATS, REPOS)}
+PUBLIC = "public_repositories"  # the same items, public ones only: a new one is risky
+# Self-hosted runners: "<repo_id>:<runner_id>: <name>" on your repositories, "<runner_id>: <name>" on an organisation.
+RUNNERS = "runners"
+SNAPSHOT_CATS = {False: (*KEY_CATS, "emails", REPOS, PUBLIC, *REPO_CATS, RUNNERS),
+                 True: (*ORG_CATS, REPOS, PUBLIC, RUNNERS)}
 # API steps and the categories each one covers, in the order it deletes.
-STEP_CATS = {"keys": KEY_CATS, "emails": ("emails",), "repo_access": REPO_CATS, "org_access": ORG_CATS}
+STEP_CATS = {"keys": KEY_CATS, "emails": ("emails",), "repo_access": (*REPO_CATS, RUNNERS),
+             "org_access": (*ORG_CATS, RUNNERS)}
 # (action, phase, tier, watch, link, title); links and titles take {name} (login or organisation).
 _PERSONAL = [
     ("keys", F, A, R, None, "Delete SSH, signing and GPG keys that were added without you"),
     ("emails", P, A, R, None, "Remove email addresses that were added without you (the primary one stays)"),
     ("repo_access", P, A, R, None,
-     "Remove deploy keys, webhooks, collaborators and invitations on your repositories that were added without you"),
+     "Remove deploy keys, webhooks, collaborators, invitations and self-hosted runners on your repositories "
+     "that were added without you"),
     ("sign_out", F, G, N, "https://github.com/settings/sessions", "Sign out of every session you do not recognise"),
     ("tokens", P, G, N, "https://github.com/settings/tokens",
      "Delete every personal access token you do not recognise, except the one panic-button uses"),
@@ -41,7 +47,7 @@ _PERSONAL = [
 ]
 _ORG = [
     ("org_access", P, A, R, None,
-     "Remove webhooks, deploy keys and outside collaborators that were added without you"),
+     "Remove webhooks, deploy keys, outside collaborators and self-hosted runners that were added without you"),
     ("members", P, G, N, "https://github.com/orgs/{name}/people",
      "Review the members and owners; remove anyone you do not recognise"),
 ]
@@ -63,8 +69,9 @@ def _hook_item(h: dict, **extra) -> str:
     return _j(url=plain, fingerprint=hashlib.sha256(url.encode()).hexdigest()[:12], events=sorted(h["events"]), **extra)
 
 
-def _read_list(api: Api, path: str, make, params: dict | None = None) -> list[tuple[str, tuple | None]]:
-    return [make(x) for x in api.pages(path, params)]
+def _read_list(api: Api, path: str, make, params: dict | None = None,
+               key: str | None = None) -> list[tuple[str, tuple | None]]:
+    return [make(x) for x in api.pages(path, params, key)]
 
 
 # Each reader returns (item, delete) pairs: delete is (path, body) or None when the item must never be removed.
@@ -131,9 +138,26 @@ def _repo_invitations(api, repo, rid):
         (f"/repos/{repo}/invitations/{i['id']}", None)))
 
 
+def _runners(api, path, make):
+    try:
+        return _read_list(api, path, lambda r: (make(r), (f"{path}/{r['id']}", None)), {"per_page": 100}, "runners")
+    except ApiError as e:
+        if e.status in (403, 404):  # listing runners needs admin rights there: none we can see
+            return []
+        raise
+
+
+def _repo_runners(api, repo, rid):
+    return _runners(api, f"/repos/{repo}/actions/runners", lambda r: f"{rid}:{r['id']}: {r['name']}")
+
+
+def _org_runners(api, org):
+    return _runners(api, f"/orgs/{org}/actions/runners", lambda r: f"{r['id']}: {r['name']}")
+
+
 _REPO_READERS = {"deploy_keys": _repo_deploy_keys, "webhooks": _repo_webhooks, "collaborators": _repo_collaborators,
-                 "invitations": _repo_invitations}
-_HOURLY = (*_REPO_READERS, REPOS)
+                 "invitations": _repo_invitations, RUNNERS: _repo_runners}
+_HOURLY = (*_REPO_READERS, REPOS, PUBLIC)
 
 
 def _is_org(account_id: str) -> bool:
@@ -178,14 +202,19 @@ class GitHub:
 
     def _read(self, account: Account, cats) -> dict[str, list]:
         api, name, repos, out = self._api(account.id), account.id.removeprefix("org:"), None, {}
+        org = _is_org(account.id)
         for cat in cats:
-            if cat in _HOURLY:
+            if cat == RUNNERS and org:
+                out[cat] = _org_runners(api, quote(name, safe=""))
+            elif cat in _HOURLY:
                 if repos is None:
-                    rows = (api.pages(f"/orgs/{name}/repos", {"type": "all", "per_page": 100}) if _is_org(account.id)
+                    rows = (api.pages(f"/orgs/{name}/repos", {"type": "all", "per_page": 100}) if org
                             else api.pages("/user/repos", {"affiliation": "owner", "per_page": 100}))
-                    repos = [(r["id"], r["full_name"]) for r in rows]
-                out[cat] = ([(f"{rid}: {full}", None) for rid, full in repos] if cat == REPOS else
-                            [e for rid, full in repos for e in _REPO_READERS[cat](api, quote(full, safe="/"), rid)])
+                    repos = [(r["id"], r["full_name"], r.get("private") is False) for r in rows]
+                if cat in (REPOS, PUBLIC):
+                    out[cat] = [(f"{rid}: {full}", None) for rid, full, public in repos if public or cat == REPOS]
+                else:
+                    out[cat] = [e for rid, full, _ in repos for e in _REPO_READERS[cat](api, quote(full, safe="/"), rid)]
             else:
                 out[cat] = _READERS[cat](api, name)
         return out
@@ -217,6 +246,8 @@ class GitHub:
         def classify(cat: str, item: str) -> str | None:
             if cat == REPOS:
                 return None
+            if cat in (PUBLIC, RUNNERS):
+                return "repo_made_public" if cat == PUBLIC else "runner_added"
             if org:
                 return "org_access_added"
             return "key_added" if cat in KEY_CATS else "email_added" if cat == "emails" else "repo_access_added"
@@ -230,20 +261,21 @@ class GitHub:
         return baseline[category]
 
     def _known_all(self, step: Step, baseline: Snapshot) -> dict[str, list[str]]:
+        """The categories the step acts on, each with what it keeps."""
         cats = STEP_CATS[step.action]
         if set(cats) & set(_REPO_READERS):
             # A baseline from before items carried repo_id matches nothing: it must not mean "delete all".
             self._known(step, baseline, REPOS)
-        return {c: self._known(step, baseline, c) for c in cats}
+        # A baseline armed before runners were watched removes no runner; the guard adopts them on its next read.
+        return {c: self._known(step, baseline, c) for c in cats if c != RUNNERS or c in baseline}
 
     def run(self, step: Step, baseline: Snapshot) -> None:
         if step.action not in STEP_CATS:
             raise NotImplementedError(f"{step.action} is a guided step")
-        cats = STEP_CATS[step.action]
         known = self._known_all(step, baseline)
-        entries = self._entries(Account(step.account, self.provider), cats, fresh=True)  # every list read before any delete
+        entries = self._entries(Account(step.account, self.provider), known, fresh=True)  # every list read before any delete
         api = self._api(step.account)
-        for cat in cats:
+        for cat in known:
             for item, delete in entries[cat]:
                 if item in known[cat] or delete is None:
                     continue
@@ -260,7 +292,6 @@ class GitHub:
     def check(self, step: Step, baseline: Snapshot) -> bool | None:
         if step.action not in STEP_CATS:
             return None
-        cats = STEP_CATS[step.action]
         known = self._known_all(step, baseline)
-        entries = self._entries(Account(step.account, self.provider), cats, fresh=True)
+        entries = self._entries(Account(step.account, self.provider), known, fresh=True)
         return all(item in known[c] for c, es in entries.items() for item, _ in es)

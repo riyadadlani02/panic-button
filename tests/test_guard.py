@@ -354,3 +354,32 @@ def test_the_same_event_key_on_two_accounts_acts_on_both():
         conns[a].event_findings = [Finding(a, "provider_flagged_login", Severity.TRIGGER, "f", ("anomaly",), key="e-1")]
     _, acts, *_ = run(accts, conns=conns)
     assert [t for t, _ in acts] == [["x"], ["y"]]
+
+
+class Drifting(FakeConnector):
+    """Real drift: a category missing from the baseline raises, as every connector does."""
+    def signals(self, account, snapshot, baseline):
+        from panic.signals import drift
+        return drift(account.id, baseline, snapshot, lambda c, i: "key_added")
+
+
+def test_a_category_missing_from_an_old_baseline_is_adopted_once_and_never_overrides_a_known_one():
+    c = Drifting()
+    c.snap = {"old": ["a", "b"], "new": ["n"]}
+    baselines, state, acts, notes, extended = {"mail": {"old": ["a"]}}, new_state(), [], [], []
+    for _ in range(2):
+        guard_once([Account("mail", "fake")], [], {"mail": c}, baselines, set(), state, "alert",
+                   lambda t, f: acts.append(t), lambda f, extra: notes.append(f), lambda: None, lambda: 1e6,
+                   extend=lambda i, cats: extended.append((i, cats)))
+    assert extended == [("mail", {"new": ["n"]})] and baselines["mail"] == {"old": ["a"], "new": ["n"]}
+    assert [(n.code, n.items) for n in notes] == [("key_added", ("old: b",))]  # "old" was never adopted
+
+
+def test_a_dry_run_reads_with_the_adopted_category_but_saves_nothing():
+    c = Drifting()
+    c.snap = {"old": ["a"], "new": ["n"]}
+    baselines, extended = {"mail": {"old": ["a"]}}, []
+    lines = guard_once([Account("mail", "fake")], [], {"mail": c}, baselines, set(), new_state(), "press",
+                       lambda t, f: None, lambda f, extra: None, lambda: None, lambda: 1e6, dry_run=True,
+                       extend=lambda i, cats: extended.append(i))
+    assert extended == [] and baselines["mail"] == {"old": ["a"]} and "0 findings" in lines[-1]

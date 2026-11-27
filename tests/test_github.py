@@ -29,7 +29,7 @@ class FakeApi:
         self.reads, self.deleted, self.sent = [], [], []
         self.fail_delete = None
 
-    def pages(self, path, params=None):
+    def pages(self, path, params=None, key=None):
         self.reads.append(path)
         v = self.lists.get(path, [])
         if isinstance(v, Exception):
@@ -61,11 +61,12 @@ def personal_api():
         "/user/ssh_signing_keys": [{"id": 3, "key": "S1", "title": "sign"}],
         "/user/gpg_keys": [{"id": 4, "key_id": "G1", "name": "gpg"}],
         "/user/emails": [{"email": "me@x.test", "primary": True}, {"email": "evil@x.test", "primary": False}],
-        "/user/repos": [{"id": 11, "full_name": "me/r"}],
+        "/user/repos": [{"id": 11, "full_name": "me/r", "private": True}],
         "/repos/me/r/keys": [{"id": 5, "key": "D1", "title": "deploy"}, {"id": 6, "key": "D2", "title": "evil"}],
         "/repos/me/r/hooks": [{"id": 7, "config": {"url": "https://h.test/x"}, "events": ["push", "fork"]}],
         "/repos/me/r/collaborators": [{"login": "me"}, {"login": "bob"}],
         "/repos/me/r/invitations": [{"id": 8, "invitee": {"login": "carol"}, "permissions": "write"}],
+        "/repos/me/r/actions/runners": [{"id": 21, "name": "build-box"}],
     })
 
 
@@ -83,8 +84,9 @@ def step(conn, action, account=ME):
 
 def test_personal_snapshot_shape_and_canonical_items():
     snap = gh(personal_api()).snapshot(ME)
-    assert set(snap) == {*KEY_CATS, "emails", "repositories", *REPO_CATS}
-    assert snap["repositories"] == ["11: me/r"]
+    assert set(snap) == {*KEY_CATS, "emails", "repositories", "public_repositories", *REPO_CATS, "runners"}
+    assert snap["repositories"] == ["11: me/r"] and snap["public_repositories"] == []
+    assert snap["runners"] == ["11:21: build-box"]
     assert snap["ssh_keys"][0] == item(key="K1", title="laptop")
     assert snap["emails"] == [item(email="me@x.test"), item(email="evil@x.test")]
     assert snap["deploy_keys"][0] == item(key="D1", title="deploy", repo_id=11)
@@ -98,12 +100,14 @@ def test_org_snapshot_shape():
     api = FakeApi({"/orgs/acme/hooks": [{"id": 1, "config": {"url": "https://h.test"}, "events": ["push"]}],
                    "/orgs/acme/outside_collaborators": [{"login": "bob"}],
                    "/orgs/acme/repos": [{"id": 12, "full_name": "acme/r"}],
-                   "/repos/acme/r/keys": [{"id": 2, "key": "D", "title": "t"}]})
+                   "/repos/acme/r/keys": [{"id": 2, "key": "D", "title": "t"}],
+                   "/orgs/acme/actions/runners": [{"id": 31, "name": "org-box"}]})
     snap = gh(api).snapshot(ORG)
     assert snap == {"org_webhooks": [hook("https://h.test", ["push"])],
                     "outside_collaborators": [item(login="bob")],
                     "deploy_keys": [item(key="D", title="t", repo_id=12)],
-                    "repositories": ["12: acme/r"]}
+                    "repositories": ["12: acme/r"], "public_repositories": [],
+                    "runners": ["31: org-box"]}
 
 
 def test_baseline_key_survives_and_added_key_is_deleted():
@@ -274,7 +278,7 @@ def test_a_renamed_repository_is_only_a_changed_notice_and_run_deletes_nothing()
     c = gh(api)
     base = c.snapshot(ME)
     api.lists["/user/repos"] = [{"id": 11, "full_name": "me/renamed"}]
-    for path in ("keys", "hooks", "collaborators", "invitations"):
+    for path in ("keys", "hooks", "collaborators", "invitations", "actions/runners"):
         api.lists[f"/repos/me/renamed/{path}"] = api.lists.pop(f"/repos/me/r/{path}")
     c.run(step(c, "repo_access"), base)
     assert api.deleted == [] and c.check(step(c, "repo_access"), base) is True
@@ -314,3 +318,82 @@ def test_a_baseline_without_repositories_fails_closed_before_any_delete():
     with pytest.raises(KeyError, match="repositories"):
         c.run(step(c, "org_access", ORG), org)
     assert api.deleted == []
+
+
+def test_a_public_repository_created_or_made_public_is_risky_and_a_private_one_is_not():
+    api = personal_api()
+    base = gh(api).snapshot(ME)
+    api.lists["/user/repos"] = [*api.lists["/user/repos"], {"id": 12, "full_name": "me/new", "private": True}]
+    assert [(f.code, f.severity) for f in gh(api).signals(ME, gh(api).snapshot(ME), base)] == [
+        ("changed", Severity.NOTICE)]
+    api.lists["/user/repos"] = [*api.lists["/user/repos"], {"id": 13, "full_name": "me/open", "private": False}]
+    got = {f.code: f for f in gh(api).signals(ME, gh(api).snapshot(ME), base)}
+    assert got["repo_made_public"].severity is Severity.TRIGGER
+    assert got["repo_made_public"].items == ("public_repositories: 13: me/open",)
+    api.lists["/user/repos"] = [{"id": 11, "full_name": "me/r", "private": False}]  # flipped
+    got = {f.code: f for f in gh(api).signals(ME, gh(api).snapshot(ME), base)}
+    assert got["repo_made_public"].items == ("public_repositories: 11: me/r",)
+
+
+def test_a_new_runner_is_risky_on_a_repository_and_an_organisation():
+    api = personal_api()
+    base = gh(api).snapshot(ME)
+    api.lists["/repos/me/r/actions/runners"] = [*api.lists["/repos/me/r/actions/runners"], {"id": 22, "name": "evil"}]
+    got = gh(api).signals(ME, gh(api).snapshot(ME), base)
+    assert [(f.code, f.severity, f.items) for f in got] == [
+        ("runner_added", Severity.TRIGGER, ("runners: 11:22: evil",))]
+    org = {"org_webhooks": [], "outside_collaborators": [], "deploy_keys": [], "repositories": [],
+           "public_repositories": [], "runners": []}
+    assert [f.code for f in gh(api).signals(ORG, {**org, "runners": ["31: x"]}, org)] == ["runner_added"]
+    assert [f.code for f in gh(api).signals(ORG, {**org, "public_repositories": ["1: acme/x"]}, org)] == [
+        "repo_made_public"]
+
+
+def test_repo_access_removes_only_runners_outside_the_baseline_and_reads_back():
+    api = personal_api()
+    c = gh(api)
+    base = c.snapshot(ME)
+    api.lists["/repos/me/r/actions/runners"] = [{"id": 21, "name": "build-box"}, {"id": 22, "name": "evil"}]
+    assert c.check(step(c, "repo_access"), base) is False
+    c.run(step(c, "repo_access"), base)
+    assert api.deleted == ["/repos/me/r/actions/runners/22"]
+    api.lists["/repos/me/r/actions/runners"] = [{"id": 21, "name": "build-box"}]
+    assert c.check(step(c, "repo_access"), base) is True
+
+
+def test_org_access_removes_org_runners_outside_the_baseline():
+    api = FakeApi({"/orgs/acme/actions/runners": [{"id": 31, "name": "org-box"}, {"id": 32, "name": "evil"}]})
+    c = gh(api)
+    c.run(step(c, "org_access", ORG), {"org_webhooks": [], "outside_collaborators": [], "deploy_keys": [],
+                                       "repositories": [], "runners": ["31: org-box"]})
+    assert api.deleted == ["/orgs/acme/actions/runners/32"]
+
+
+def test_a_baseline_without_runners_removes_no_runner_but_still_the_rest():
+    api = personal_api()
+    c = gh(api)
+    base = {k: v for k, v in c.snapshot(ME).items() if k not in ("runners", "public_repositories")}
+    api.lists["/repos/me/r/actions/runners"].append({"id": 22, "name": "evil"})
+    api.lists["/repos/me/r/keys"].append({"id": 9, "key": "D9", "title": "new"})
+    c.run(step(c, "repo_access"), base)
+    assert api.deleted == ["/repos/me/r/keys/9"]
+    api.lists["/repos/me/r/keys"].pop()
+    assert c.check(step(c, "repo_access"), base) is True
+    api = FakeApi({"/orgs/acme/actions/runners": [{"id": 32, "name": "evil"}]})
+    c = gh(api)
+    c.run(step(c, "org_access", ORG), {"org_webhooks": [], "outside_collaborators": [], "deploy_keys": [],
+                                       "repositories": []})
+    assert api.deleted == []
+
+
+def test_runners_unreadable_without_admin_count_as_none_for_that_repository():
+    for status in (403, 404):
+        api = personal_api()
+        api.lists["/user/repos"].append({"id": 12, "full_name": "me/shared", "private": True})
+        api.lists["/repos/me/r/actions/runners"] = ApiError(status, "")
+        api.lists["/repos/me/shared/actions/runners"] = [{"id": 23, "name": "box"}]
+        assert gh(api).snapshot(ME)["runners"] == ["12:23: box"]
+    api = personal_api()
+    api.lists["/repos/me/r/actions/runners"] = ApiError(500, "")
+    with pytest.raises(ApiError):
+        gh(api).snapshot(ME)

@@ -8,7 +8,7 @@ from typing import Callable
 
 from panic.graph import downstream, resetters
 from panic.model import Account, Edges, Finding, Severity, Snapshot
-from panic.signals import TEXT
+from panic.signals import TEXT, adopted
 
 COOLDOWN_S = 24 * 3600
 RENOTIFY_S = 3600  # an account that stays unreadable is notified again this often
@@ -57,10 +57,18 @@ def _hms(t: float) -> str:
     return datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M:%S")
 
 
-def _read(conn, account: Account, baseline: Snapshot | None) -> tuple[Snapshot, list[Finding]]:
+def _read(conn, account: Account, baselines: dict[str, Snapshot],
+          extend: Callable[[str, Snapshot], None] | None) -> tuple[Snapshot, list[Finding]]:
     snap = conn.snapshot(account)
+    baseline = baselines.get(account.id)
     if baseline is None:
         raise KeyError(f"no baseline recorded for {account.id}")
+    new = adopted(baseline, snap)
+    if new:  # a category the connector began watching after this vault was armed
+        baseline = {**baseline, **new}
+        if extend is not None:
+            extend(account.id, new)
+            baselines[account.id] = baseline
     return snap, conn.signals(account, snap, baseline)
 
 
@@ -69,11 +77,13 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
                act: Callable[[list[str], list[Finding]], bool | None], notify: Callable[[Finding, str], None],
                save: Callable[[], None], now: Callable[[], float] = time.time,
                dry_run: bool = False, wait: float = 0, ask: Callable[[str, list[Finding], float], None] | None = None,
-               accept: Callable[[str, Snapshot], None] | None = None) -> list[str]:
+               accept: Callable[[str, Snapshot], None] | None = None,
+               extend: Callable[[str, Snapshot], None] | None = None) -> list[str]:
     """`released` holds the accounts the guard must skip; `act` returns False when the press failed.
     With `wait` > 0 in press or contain mode, each finding is asked about first (`ask`); the answers
     land in state["asks"]. A lock answer or an unanswered risky question at its deadline acts; harmless
-    changes the user accepted, or left unanswered past the deadline, become the baseline (`accept`)."""
+    changes the user accepted, or left unanswered past the deadline, become the baseline (`accept`).
+    Categories a baseline lacks are read as baseline and, outside a dry run, saved once (`extend`)."""
     lines: list[str] = []
     armed = {a.id: a for a in accounts}
     read = found = skipped = 0
@@ -81,6 +91,7 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
     t = now()
     seen, events_seen, asks, floors = state["seen"], state["events_seen"], state["asks"], state["floors"]
     asking = wait > 0 and mode != "alert"
+    grow = None if dry_run else extend
     if not dry_run:
         for k in [k for k, at in events_seen.items() if at < t - EVENTS_KEPT_S]:
             del events_seen[k]
@@ -207,7 +218,7 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
             v["answer"] == "accept" or (not v["risky"] and v["answer"] is None and t >= v["deadline"]))}
         if keep and keep == {k for k, v in mine.items() if not v["event"]}:
             try:
-                snap, again = _read(conn, acct, baselines.get(acct.id))
+                snap, again = _read(conn, acct, baselines, grow)
             except Exception:  # this account waits for the next pass; the others are still read
                 found += 1
                 read_failure(_notice(acct.id, "unreadable"))
@@ -235,7 +246,7 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
                 del asks[k]
             floors.pop(acct.id, None)
         try:
-            snap, snap_found = _read(conn, acct, baselines.get(acct.id)) if has_signals else (None, [])
+            snap, snap_found = _read(conn, acct, baselines, grow) if has_signals else (None, [])
         except Exception:  # includes the fail-closed missing baseline
             found += 1
             read_failure(_notice(acct.id, "unreadable"))
@@ -272,7 +283,7 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
         triggers = [f for f in snap_found if f.severity == Severity.TRIGGER]
         if triggers:
             try:
-                again = {f.code for f in _read(conn, acct, baselines.get(acct.id))[1] if f.severity == Severity.TRIGGER}
+                again = {f.code for f in _read(conn, acct, baselines, grow)[1] if f.severity == Severity.TRIGGER}
                 triggers = [f for f in triggers if f.code in again]
             except Exception:  # a failed re-read confirms nothing; the next pass re-evaluates
                 triggers = []

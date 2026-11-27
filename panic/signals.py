@@ -17,6 +17,8 @@ TEXT = {
     "org_access_added": "A new app or key has access to your organisation.",
     "app_consent_added": "A new app was given access to this account.",
     "app_password_added": "A new app password was created on this account.",
+    "repo_made_public": "A repository was created as public or made public.",
+    "runner_added": "A new self-hosted runner was attached to your repositories.",
     "auth_method_added": "A new sign-in method was added to this account.",
     "provider_flagged_login": "The provider flagged a suspicious sign-in.",
     "changed": "Something else on this account changed since the baseline.",
@@ -40,6 +42,12 @@ def drift(account_id: str, baseline: Snapshot, snapshot: Snapshot,
     if None in by_code:
         out.append(Finding(account_id, "changed", Severity.NOTICE, TEXT["changed"], tuple(sorted(by_code[None]))))
     return out
+
+
+def adopted(baseline: Snapshot, snapshot: Snapshot) -> Snapshot:
+    """The snapshot's categories the baseline lacks, taken as baseline: a connector that starts watching a new
+    category must not leave an older vault unreadable. A category the baseline has is never taken."""
+    return {cat: items for cat, items in snapshot.items() if cat not in baseline}
 
 
 def gmail_rule_code(item: str, own_domain: str | None) -> str | None:

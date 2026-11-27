@@ -11,6 +11,7 @@ from panic.guard import _from_ask, _key, guard_once, load_state
 from panic.model import Account, Finding, Outcome, Severity, Tier, WatchPolicy
 from panic.session import (ORG_PROVIDERS, CliError, Session, _connectors, _outcomes, _recent_results, _reload,
                            _unguarded, _warn)
+from panic.signals import adopted
 
 MIN_INTERVAL_S = 30
 MAX_WAIT_S = 7 * 24 * 3600
@@ -122,6 +123,13 @@ def cmd_guard(a) -> int:
                     s.update(lambda d: d["baselines"].__setitem__(acct, snap))
                     s.log({"event": "guard_accepted", "account": acct})
 
+                def extended(acct: str, cats) -> None:
+                    def grow(d: dict) -> None:  # a category another writer saved meanwhile is kept
+                        if acct in d["baselines"]:
+                            d["baselines"][acct].update(adopted(d["baselines"][acct], cats))
+                    s.update(grow)
+                    s.log({"event": "baseline_extended", "account": acct, "detail": ", ".join(sorted(cats))})
+
                 def shown(f: Finding) -> str:  # items are raw provider data: personal accounts only
                     return f.text if f.account in org or not f.items else f"{f.text} ({'; '.join(f.items)})"
 
@@ -168,7 +176,7 @@ def cmd_guard(a) -> int:
                 per_acct = {x.id: conns[x.provider] for x in accounts if x.provider in conns}
                 for line in guard_once(accounts, edges, per_acct, data["baselines"], set(_unguarded(data)),
                                        state, a.on_detect, act, notifier, save, dry_run=a.dry_run, wait=a.wait,
-                                       ask=asker, accept=accepted):
+                                       ask=asker, accept=accepted, extend=extended):
                     print(line)
                 if not a.dry_run:
                     if state != before:  # guard_once only saves before acting; notices and cursors need it too
