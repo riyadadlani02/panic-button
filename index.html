@@ -209,6 +209,17 @@ footer { padding:28px var(--pad) 44px; display:flex; flex-wrap:wrap; gap:10px 30
           <li>It does not clean malware. Press from a device you trust.</li>
         </ul>
       </div>
+      <div class="hud">
+        <h3>What it cannot stop</h3>
+        <ul class="plain small">
+          <li>Theft at a vendor you already connected to.</li>
+          <li>Malware on your computer.</li>
+          <li>SIM swaps at your carrier.</li>
+          <li>Wallet and seed-phrase scams.</li>
+          <li>iCloud: it has no API.</li>
+          <li>Data copied in the first minutes, before any setting changes.</li>
+        </ul>
+      </div>
     </div>
   </div>
   <div class="ticks"></div>
@@ -250,6 +261,7 @@ footer { padding:28px var(--pad) 44px; display:flex; flex-wrap:wrap; gap:10px 30
           <li><span>Unzip it and open Terminal in that folder.</span></li>
           <li><span>Run <code>sh install.sh</code>. No admin password needed.</span></li>
           <li><span>Run <code>panic setup</code>. It asks which account you want to protect, walks you through that service, and arms it.</span></li>
+          <li><span>Run <code>panic checkup</code> for a read-only safety check. It changes nothing on your accounts.</span></li>
         </ol>
       </div>
       <div class="hud">
