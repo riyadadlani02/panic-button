@@ -397,3 +397,31 @@ def test_runners_unreadable_without_admin_count_as_none_for_that_repository():
     api.lists["/repos/me/r/actions/runners"] = ApiError(500, "")
     with pytest.raises(ApiError):
         gh(api).snapshot(ME)
+
+
+@pytest.mark.parametrize("limited", [
+    ApiError(403, '{"message": "API rate limit exceeded for user ID 1."}'),
+    ApiError(403, '{"message": "You have exceeded a secondary rate limit."}'),
+    ApiError(403, "", headers={"x-ratelimit-remaining": "0"}),
+    ApiError(403, "", headers={"retry-after": "60"}),
+])
+def test_a_rate_limited_runners_read_fails_and_caches_nothing(limited):
+    api, t = personal_api(), [0.0]
+    c = gh(api, now=lambda: t[0])
+    good = api.lists["/repos/me/r/actions/runners"]
+    api.lists["/repos/me/r/actions/runners"] = limited
+    with pytest.raises(ApiError):
+        c.snapshot(ME)
+    api.lists["/repos/me/r/actions/runners"] = good
+    assert c.snapshot(ME)["runners"] == ["11:21: build-box"]  # read again, not an empty list from the cache
+
+
+def test_a_rate_limited_repository_list_fails_and_caches_nothing():
+    api = personal_api()
+    c = gh(api)
+    good = api.lists["/user/repos"]
+    api.lists["/user/repos"] = ApiError(403, '{"message": "API rate limit exceeded"}')
+    with pytest.raises(ApiError):
+        c.snapshot(ME)
+    api.lists["/user/repos"] = good
+    assert c.snapshot(ME)["repositories"] == ["11: me/r"]

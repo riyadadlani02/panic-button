@@ -138,11 +138,17 @@ def _repo_invitations(api, repo, rid):
         (f"/repos/{repo}/invitations/{i['id']}", None)))
 
 
+def _rate_limited(e: ApiError) -> bool:
+    # GitHub answers a rate limit with 403 too; read as "no runners" it would drop the owner's from a baseline.
+    return (e.headers.get("x-ratelimit-remaining") == "0" or e.headers.get("retry-after") is not None
+            or "rate limit" in e.body.lower())
+
+
 def _runners(api, path, make):
     try:
         return _read_list(api, path, lambda r: (make(r), (f"{path}/{r['id']}", None)), {"per_page": 100}, "runners")
     except ApiError as e:
-        if e.status in (403, 404):  # listing runners needs admin rights there: none we can see
+        if e.status == 404 or (e.status == 403 and not _rate_limited(e)):  # no admin rights there: none we can see
             return []
         raise
 

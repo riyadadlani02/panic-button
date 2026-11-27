@@ -14,9 +14,9 @@ RETRIES = 3
 class ApiError(Exception):
     """`body` is for diagnostics and may hold provider data; the message never does."""
 
-    def __init__(self, status: int, body: str, message: str | None = None):
+    def __init__(self, status: int, body: str, message: str | None = None, headers=None):
         super().__init__(message or f"HTTP {status}")
-        self.status, self.body = status, body[:200]
+        self.status, self.body, self.headers = status, body[:200], headers or {}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -81,7 +81,7 @@ class Api:
                 tries += 1
                 self._sleep(wait)
                 continue
-            raise ApiError(status, _decode(raw), f"{where}: HTTP {status}")
+            raise ApiError(status, _decode(raw), f"{where}: HTTP {status}", hdrs)
 
     @staticmethod
     def _json(raw: bytes) -> Any:

@@ -74,6 +74,13 @@ def test_pages_can_take_the_list_from_a_wrapping_object():
         a.pages("/items", key="runners")
 
 
+def test_an_error_keeps_the_response_headers():
+    a, s, _ = api(err(403, b"limited", headers={"X-RateLimit-Remaining": "0"}))
+    with pytest.raises(ApiError) as e:
+        a.get("/x")
+    assert e.value.headers.get("x-ratelimit-remaining") == "0"
+
+
 def test_429_sleeps_retry_after_then_succeeds():
     a, s, sleeps = api(err(429, headers={"Retry-After": "3"}), Resp(b'{"ok": true}'))
     assert a.get("/x") == {"ok": True} and sleeps == [3.0] and len(s.requests) == 2
