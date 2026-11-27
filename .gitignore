@@ -11,3 +11,4 @@ sa.json
 client_secret*.json
 demo/*.mp4
 dist/
+.DS_Store
