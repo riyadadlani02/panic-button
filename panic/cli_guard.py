@@ -158,8 +158,9 @@ def cmd_guard(a) -> int:
                         else:  # a new press puts lock enforcement back
                             _guard("clear the released list", lambda: s.update(lambda d: d.__setitem__(
                                 "released", sorted(set(d.get("released", [])) - set(targets)))))
-                        out = executor.press(plan, accounts, edges, conns, data["baselines"], lambda step: False, s.log,
-                                             progress=_warn, checkpoint=checkpoint)
+                        with a.press_lock:
+                            out = executor.press(plan, accounts, edges, conns, data["baselines"], lambda step: False,
+                                                 s.log, progress=_warn, checkpoint=checkpoint)
                         out.triggers = [f"{f.code}: {shown(f)}" for f in findings]
                         _guard("save the outcome to the vault", lambda: _save_outcome(s, out))
                         _publish_report(s, out)

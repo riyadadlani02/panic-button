@@ -16,6 +16,7 @@ panic = "panic.cli:main"
 
 [dependency-groups]
 dev = ["pytest"]
+app = ["pywebview>=6,<7", "keyring>=25,<26", "pyinstaller>=6,<7"]
 
 [build-system]
 requires = ["hatchling"]

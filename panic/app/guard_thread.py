@@ -1,0 +1,107 @@
+"""`panic guard` in a background thread, with its questions answered in the app instead of a macOS dialog."""
+import collections
+import itertools
+import threading
+import time
+from pathlib import Path
+
+from panic import cli
+from panic.app.bridge import routed
+
+ANSWERS = ("accept", "lock", "none")  # "none": dismissed, as a dialog closed without a button
+
+
+class _Asker:
+    """The guard's dialog protocol (panic.ask): open_dialog returns a handle, answer(handle) polls it."""
+
+    def __init__(self, on_question):
+        self.on_question, self.open = on_question, {}
+        self._ids, self._lock = itertools.count(1), threading.Lock()
+
+    def open_dialog(self, title: str, text: str, seconds: float):
+        q = {"handle": next(self._ids), "account": title.removeprefix("panic: "), "text": text,
+             "deadline": time.time() + max(1, seconds), "answer": None}
+        with self._lock:
+            self.open[q["handle"]] = q
+        self.on_question(self.shown(q))
+        return q["handle"]
+
+    @staticmethod
+    def shown(q: dict) -> dict:
+        return {k: q[k] for k in ("handle", "account", "text", "deadline")}
+
+    def answer(self, handle):
+        with self._lock:
+            q = self.open.get(handle)
+            if q is None:
+                return "none"
+            if q["answer"] is None and time.time() < q["deadline"]:
+                return None
+            del self.open[handle]
+            return q["answer"] or "none"  # past the deadline unanswered: a dialog that gave up
+
+
+class GuardThread:
+    def __init__(self, vault, keyfile, passphrase, on_question=lambda q: None, on_notice=lambda title, text: None,
+                 press_lock=None, **main_kwargs):
+        self.vault, self.keyfile = str(Path(vault).expanduser()), str(Path(keyfile).expanduser())
+        self._passphrase, self.on_notice, self._kw = passphrase, on_notice, main_kwargs
+        self.press_lock = press_lock or threading.Lock()
+        self._asker = _Asker(on_question)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.output: collections.deque[str] = collections.deque(maxlen=2000)
+        self.code: int | None = None
+
+    @property
+    def running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def start(self) -> None:
+        if self.running:
+            return
+        self._stop.clear()
+        self.code = None
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 3) -> bool:
+        """True once the guard has ended. A pass in progress finishes first."""
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout)
+        return not self.running
+
+    def questions(self) -> list[dict]:
+        with self._asker._lock:
+            return [self._asker.shown(q) for q in self._asker.open.values()
+                    if q["answer"] is None and q["deadline"] > time.time()]
+
+    def answer(self, handle, value: str) -> bool:
+        if value not in ANSWERS:
+            raise ValueError(f"answer must be one of {', '.join(ANSWERS)}")
+        with self._asker._lock:
+            q = self._asker.open.get(handle)
+            if q is None or q["answer"] is not None or q["deadline"] <= time.time():
+                return False
+            q["answer"] = value
+            return True
+
+    def _sleep(self, seconds: float) -> None:  # cmd_guard ends on KeyboardInterrupt with "Guard stopped."
+        if self._stop.wait(seconds):
+            raise KeyboardInterrupt
+
+    def _run(self) -> None:
+        with routed(self):
+            self.code = cli.main(["--vault", self.vault, "--keyfile", self.keyfile, "guard"], asker=self._asker,
+                                 notifier=self.on_notice, sleep=self._sleep, press_lock=self.press_lock, **self._kw)
+
+    # -- handler, called on the guard's thread --
+
+    def write(self, s: str) -> None:
+        self.output.append(s)
+
+    def prompt(self, text: str, secret: bool) -> str:
+        if secret and text.startswith("Passphrase"):
+            return self._passphrase
+        raise EOFError  # the guard asks nothing else; never answered by default

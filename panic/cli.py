@@ -1,5 +1,6 @@
 """The `panic` command line: wires the vault, connectors, engine and report together."""
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -111,7 +112,7 @@ def _watch(a, s: Session, outcomes: list[Outcome], conns: dict) -> int:
 
     print(f"Watching for {hours:.1f} more hours. Press Ctrl-C to stop; resume with `panic watch`.")
     try:
-        executor.watch(results, conns, s.accounts, baselines, reload, s.log, hours=hours)
+        executor.watch(results, conns, s.accounts, baselines, reload, s.log, hours=hours, sleep=a.sleep)
     except KeyboardInterrupt:
         print("Watch stopped. Resume with `panic watch`.")
     return 0
@@ -151,8 +152,9 @@ def cmd_press(a) -> int:
         _write_report(s, o, *_render(s, o))
 
     # press absorbs Ctrl-C and EOF, so everything below still runs after an interrupt.
-    out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, s.log,
-                         progress=_warn, checkpoint=checkpoint)
+    with a.press_lock:  # the app's guard never presses at the same time
+        out = executor.press(plan, accounts, s.edges, conns, s.data["baselines"], _confirm, s.log,
+                             progress=_warn, checkpoint=checkpoint)
     _guard("save the outcome to the vault", lambda: _save_outcome(s, out))
     _publish_report(s, out)
     return _watch(a, s, [o for o in _outcomes(s) if o.started_at != out.started_at] + [out], conns)
@@ -311,13 +313,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, connectors: dict | None = None, authorize=None, whoami=None,
-         ms_authorize=None, sleep=time.sleep, notifier=notify.notify, asker=None, now=time.time) -> int:
+         ms_authorize=None, sleep=time.sleep, notifier=notify.notify, asker=None, now=time.time,
+         press_lock=None) -> int:
     try:
         a = _parser().parse_args(argv)
         a.connectors, a.authorize = connectors, authorize or google_personal.authorize
         a.whoami = whoami or google_personal.signed_in_address
         a.ms_authorize = ms_authorize or microsoft_personal.authorize
         a.sleep, a.notifier, a.asker, a.now = sleep, notifier, asker or ask, now
+        a.press_lock = press_lock or contextlib.nullcontext()  # the app shares one between its guard and a manual press
         return a.fn(a)
     except SystemExit as e:  # --help, or a usage error already printed
         return int(e.code or 0)

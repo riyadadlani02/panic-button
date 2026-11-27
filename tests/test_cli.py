@@ -207,7 +207,7 @@ def test_watch_ctrl_c_stops_cleanly_and_report_trusts_its_entries(armed, monkeyp
     cli("press", "--all")
     before = open_vault()["log_head"]
 
-    def interrupted(results, conns, accounts, baselines, released, logfn, hours):
+    def interrupted(results, conns, accounts, baselines, released, logfn, hours, **kw):
         logfn({"event": "changed", "account": "mail", "action": "freeze", "detail": "changed since lockdown"})
         raise KeyboardInterrupt
 
