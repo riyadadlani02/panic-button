@@ -7,7 +7,7 @@ One command that stops an attacker in your connected accounts, root account firs
 1. Everything a provider lets software revoke is revoked and then read back to prove it, root account first. Some steps have no read-back: on Workspace, sign-out, backup codes and the password reset; on Microsoft 365, sign-out; on Slack Enterprise Grid, the session reset; on a personal account, most guided steps. Those are never called verified: the report marks them "Accepted by provider" or "Owner confirmed".
 2. Anything that cannot be revoked is listed by name with when it expires. Unknown counts as open; the report never says "safe" by default.
 3. For 24 hours afterwards, while `panic press`, `panic watch` or `panic guard` keeps running, the tool re-checks the settings the API can read and puts back those it can change (the steps marked "reapply" in the table below). Other changes are reported, not undone.
-4. The tool itself is not a master key: a stolen laptop or a stolen vault file opens nothing, because opening needs both your passphrase and a separate key file.
+4. The tool itself is not a master key: on the command line, and in the app with "Remember on this Mac" off, a stolen laptop or a stolen vault file opens nothing, because opening needs both your passphrase and a separate key file. With "Remember on this Mac" on (the default in the app), your passphrase sits in the macOS Keychain, so anyone using your unlocked Mac can open the vault. To turn it off, choose File, Forget this Mac, and untick "Remember on this Mac" when you unlock.
 5. A lockdown never costs you your account: for personal accounts arming asks you to confirm a recovery path you control; organisation tenants rely on a named break-glass admin (Slack: the primary owner), which no command will act on. No password is changed by API in personal mode.
 6. The guard decides from a fixed list of rules, listed under "Guard" below. No model is involved. It re-reads an account before it presses, presses an account at most once in 24 hours, and never presses a protected account.
 7. Nothing irreversible runs on its own. No GitHub member is removed and no Slack app is uninstalled. What a press deletes is recorded in the vault as the tool read it, and `panic removed --user ID` prints it so it can be put back by hand. Some of it cannot be restored from that record: a webhook's URL and secret (only the address without its secret and a fingerprint are kept), a GPG key beyond its id, and Workspace app passwords.
@@ -74,6 +74,24 @@ Read this before relying on a connector. "Tested against recorded response shape
 | GitHub | no: tested against recorded response shapes only |
 | Slack | no: tested against recorded response shapes only |
 | Guided services | no: tested against recorded response shapes only; every link in the catalogue is unverified |
+
+## The app
+
+A desktop app for macOS, with the same engine as the command line. Windows is not available yet.
+
+1. Download the `.dmg`, open it, and drag panic button to Applications.
+2. The app is unsigned. Try to open it once; macOS refuses. Then open System Settings, Privacy & Security, and choose "Open Anyway" for panic button. The exact steps depend on your macOS version.
+3. The first time, a setup wizard asks which account to protect and arms it, the same as `panic setup`. The vault is `~/.panic/panic.vault` and the key file is `~/panic.key` unless you choose otherwise. Keep the key file apart from the vault.
+
+The Home screen lists your accounts, a PANIC button that locks everything, Check-up, Reports, and a Guard switch. The status bar shows whether the guard is on, the last check, and how many questions wait for you. When the guard asks "was this you?", the question appears there, and as a macOS dialog while the window is hidden.
+
+Keychain: the unlock screen has "Remember on this Mac", ticked by default. It stores your passphrase in the macOS Keychain (service `panic-button`) so the app opens without typing it. Anyone using your unlocked Mac can then open the vault. Untick it, or choose File, Forget this Mac, to delete the entry.
+
+Open at login: Guard, Open at login adds `~/Library/LaunchAgents/com.panicbutton.app.plist`. Untick it, or delete that file, to switch it off.
+
+Quitting: the guard runs only while the app runs. Quit asks "Keep guarding in the background?". Yes hides the window and the guard keeps running. No stops the guard and quits.
+
+To build it yourself, run `uv sync --group app`, then `scripts/build-mac-app.sh`. It writes an unsigned `dist/panic-button-<version>.dmg`.
 
 ## Install
 
