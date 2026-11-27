@@ -42,7 +42,8 @@ h3 { margin:0 0 .5em; font-size:13px; }
 
 /* hero */
 .hero-grid { display:grid; gap:16px; align-items:center; }
-.hero-lead { font-size:15px; }
+.hero-lead { font-size:16px; line-height:1.45; max-width:34em; }
+.hero-title { display:flex; align-items:center; gap:12px; margin:0 0 10px; font-size:34px; font-weight:bold; color:#0a246a; letter-spacing:-0.5px; }
 .panic-box { display:flex; flex-direction:column; align-items:center; gap:10px; }
 .panic { all:unset; box-sizing:border-box; cursor:pointer; display:grid; place-items:center; width:clamp(120px, 42vw, 190px); aspect-ratio:1; border-radius:50%; border:4px solid #5d0804;
   background:radial-gradient(ellipse 60% 38% at 50% 24%, rgba(255,255,255,.85), rgba(255,255,255,0) 100%), radial-gradient(circle at 50% 40%, #ff6a5e 0, #e5251b 50%, #8f0b06 100%);
@@ -101,13 +102,14 @@ code { font-family:"Lucida Console", Menlo, Consolas, monospace; font-size:12px;
 <div class="desktop">
 
 <header class="window" id="top-window">
-  <div class="title-bar"><img class="title-icon" src="icon.svg" alt=""><h1 class="title-bar-text">panic button</h1>
+  <div class="title-bar"><img class="title-icon" src="icon.svg" alt=""><span class="title-bar-text">panic button</span>
     <div class="title-bar-controls" aria-hidden="true"><button tabindex="-1" aria-label="Minimize"></button><button tabindex="-1" aria-label="Maximize"></button><button tabindex="-1" aria-label="Close"></button></div>
   </div>
   <nav class="menubar" aria-label="Main"><a href="#press">How it works</a><a href="#services">Services</a><a href="#get">Setup</a></nav>
   <div class="window-body">
     <div class="hero-grid" id="top">
       <div>
+        <h1 class="hero-title"><img src="icon.svg" alt="" width="44" height="44">panic button</h1>
         <p class="hero-lead">When someone gets into your accounts, one press cuts off their access and undoes what they changed.</p>
         <div class="cta"><a class="btn default" href="#get">Download for $2</a><a class="btn" href="#film">Watch the film</a></div>
       </div>
