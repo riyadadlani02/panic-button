@@ -253,7 +253,13 @@ def test_signals_filter_delegate_recovery_pop(conn):
     assert codes(conn, recovery=["phone:1"]) == {"recovery_changed"}
     assert codes(conn, imap_pop=["pop"]) == {"pop_enabled"}
     assert codes(conn, imap_pop=["imap"]) == set()
-    assert codes(conn, apps=["client"]) == set()
+    assert codes(conn, apps=["client"]) == {"app_consent_added"}
+    assert codes(conn, app_passwords=["asp1"]) == {"app_password_added"}
+
+
+def test_signals_existing_apps_and_app_passwords_are_quiet(conn):
+    base = {**BASE, "apps": ["client"], "app_passwords": ["asp1"]}
+    assert conn.signals(ACCT, base, base) == []
 
 
 def test_events_flag_only_suspicious_logins(conn, directory):

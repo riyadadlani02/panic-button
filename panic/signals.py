@@ -16,6 +16,7 @@ TEXT = {
     "repo_access_added": "A new app or key has access to your repositories.",
     "org_access_added": "A new app or key has access to your organisation.",
     "app_consent_added": "A new app was given access to this account.",
+    "app_password_added": "A new app password was created on this account.",
     "auth_method_added": "A new sign-in method was added to this account.",
     "provider_flagged_login": "The provider flagged a suspicious sign-in.",
     "changed": "Something else on this account changed since the baseline.",

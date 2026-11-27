@@ -145,7 +145,8 @@ class Workspace:
                 return gmail_rule_code(item, self.domain)
             if cat in ("forwarding", "forwarding_addresses"):  # forwarding items read "on -> address"
                 return "forwarding_added" if self._outside_domain(item.rpartition("-> ")[2]) else None
-            return {"delegates": "delegate_added", "recovery": "recovery_changed"}.get(cat) or (
+            return {"delegates": "delegate_added", "recovery": "recovery_changed",
+                    "apps": "app_consent_added", "app_passwords": "app_password_added"}.get(cat) or (
                 "pop_enabled" if cat == "imap_pop" and item == "pop" else None)
         return drift(account.id, baseline, snapshot, classify)
 
