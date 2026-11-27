@@ -1,5 +1,6 @@
 """One polling pass of the self-detection guard. Pure: reading, acting, notifying and saving are arguments."""
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -32,6 +33,21 @@ def _notice(account: str, code: str) -> Finding:
 
 def _key(f: Finding) -> str:
     return f"{f.account}|{f.code}|{'|'.join(f.items)}"
+
+
+def _per_item(fs: list[Finding]) -> list[Finding]:
+    """One question per item, so a second item of the same code never re-keys the first."""
+    return [g for f in fs for g in ([replace(f, items=(i,)) for i in f.items] or [f])]
+
+
+def _from_ask(k: str, v: dict) -> Finding:
+    code, _, item = k[len(v["account"]) + 1:].partition("|")
+    return Finding(v["account"], code, Severity.TRIGGER if v["risky"] else Severity.NOTICE, TEXT.get(code, code),
+                   (item,) if item else ())
+
+
+def _hms(t: float) -> str:
+    return datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M:%S")
 
 
 def _read(conn, account: Account, baseline: Snapshot | None) -> tuple[Snapshot, list[Finding]]:
@@ -131,8 +147,27 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
         state["failed"] = sorted(set(state["failed"]) - set(targets) if ok else set(state["failed"]) | set(targets))
 
 
+    def act_if_due(acct: Account, mine: dict, by_key: dict) -> bool:
+        """A lock answer or an unanswered risky question past its deadline acts on the account's questions."""
+        if not any(v["answer"] == "lock" or (v["risky"] and v["answer"] is None and t >= v["deadline"])
+                   for v in mine.values()):
+            return False
+        findings = [by_key.get(k) or _from_ask(k, v) for k, v in mine.items() if v["risky"] or v["answer"] == "lock"]
+        for k in mine:
+            del asks[k]
+        handle(acct, findings)
+        return True
+
     def ask_pass(acct: Account, conn, snap_found: list[Finding], triggers: list[Finding], ev: list[Finding]) -> None:
+        nonlocal found
+        snap_found, triggers, ev = _per_item(snap_found), _per_item(triggers), _per_item(ev)
         mine = {k: v for k, v in asks.items() if v["account"] == acct.id}
+        # a replaced item keeps the earliest deadline of its code, so toggling items never postpones the press
+        first = {}
+        for k, v in mine.items():
+            if v["risky"] and v["answer"] is None:
+                code = _from_ask(k, v).code
+                first[code] = min(first.get(code, v["deadline"]), v["deadline"])
         in_read = {_key(f) for f in snap_found}
         for k, v in mine.items():  # gone from a full read, or an event answered / harmless and out of time
             if (not v["event"] and k not in in_read) or (v["event"] and (
@@ -143,24 +178,26 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
             f for f in ev if f.severity == Severity.NOTICE]
         fresh = [f for f in current if _key(f) not in asks]
         for f in fresh:
-            asks[_key(f)] = mine[_key(f)] = {"account": acct.id, "risky": f.severity == Severity.TRIGGER,
-                                              "event": f in ev, "deadline": t + wait, "answer": None}
+            risky = f.severity == Severity.TRIGGER
+            deadline = min(t + wait, first.get(f.code, t + wait)) if risky else t + wait
+            asks[_key(f)] = mine[_key(f)] = {"account": acct.id, "risky": risky, "event": f in ev,
+                                              "deadline": deadline, "answer": None}
+            fate = ("pressed" if mode == "press" else "contained") if risky else "accepted"
+            lines.append(f"ask {acct.id}: {f.text} It will be {fate} at {_hms(deadline)} unless you answer.")
         if fresh and ask is not None:
-            ask(acct.id, fresh, t + wait)
-        if any(v["answer"] == "lock" or (v["risky"] and v["answer"] is None and t >= v["deadline"])
-               for v in mine.values()):
-            by_key = {_key(f): f for f in current}
-            risky = [by_key.get(k) or Finding(acct.id, k.split("|")[1], Severity.TRIGGER, TEXT.get(k.split("|")[1], k))
-                     for k, v in mine.items() if v["risky"]]
-            for k in mine:
-                del asks[k]
-            handle(acct, risky)
+            ask(acct.id, fresh, min(mine[_key(f)]["deadline"] for f in fresh))
+        if act_if_due(acct, mine, {_key(f): f for f in current}):
             return
         keep = {k for k, v in mine.items() if not v["event"] and (
             v["answer"] == "accept" or (not v["risky"] and v["answer"] is None and t >= v["deadline"]))}
         if keep and keep == {k for k, v in mine.items() if not v["event"]}:
-            snap, again = _read(conn, acct, baselines.get(acct.id))
-            if {_key(f) for f in again} <= keep:
+            try:
+                snap, again = _read(conn, acct, baselines.get(acct.id))
+            except Exception:  # this account waits for the next pass; the others are still read
+                found += 1
+                read_failure(_notice(acct.id, "unreadable"))
+                return
+            if {_key(f) for f in _per_item(again)} <= keep:
                 if accept is not None:
                     accept(acct.id, snap)
                 baselines[acct.id] = snap
@@ -175,11 +212,14 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
             skipped += 1
             continue
         read += 1
+        asking_now = asking and not cooling(acct.id)  # a pressed account is left to the watch, as before
         try:
             snap, snap_found = _read(conn, acct, baselines.get(acct.id)) if has_signals else (None, [])
         except Exception:  # includes the fail-closed missing baseline
             found += 1
             read_failure(_notice(acct.id, "unreadable"))
+            if asking_now and not dry_run:  # an unreadable account must not hold off a due press
+                act_if_due(acct, {k: v for k, v in asks.items() if v["account"] == acct.id}, {})
             continue
         forget(_notice(acct.id, "unreadable"))
         ev: list[Finding] = []
@@ -205,7 +245,7 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
             for k in [k for k in seen if k.startswith(f"{acct.id}|") and k not in current | failures]:
                 del seen[k]
         for f in snap_found + ev:
-            if f.severity == Severity.NOTICE and not asking:
+            if f.severity == Severity.NOTICE and not asking_now:
                 once(f)
 
         triggers = [f for f in snap_found if f.severity == Severity.TRIGGER]
@@ -218,7 +258,7 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
                 found += 1
                 read_failure(_notice(acct.id, "unreadable"))
         triggers += [f for f in ev if f.severity == Severity.TRIGGER]
-        if asking:
+        if asking_now:
             if dry_run:
                 lines += [f"would ask {acct.id}: {f.text}" for f in snap_found + ev]
             else:
@@ -227,6 +267,5 @@ def guard_once(accounts: list[Account], edges: Edges, connectors: dict, baseline
         if triggers:
             handle(acct, triggers)
 
-    stamp = datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M:%S")
-    lines.append(f"{stamp} read {read} accounts, {found} findings, {skipped} skipped")
+    lines.append(f"{_hms(t)} read {read} accounts, {found} findings, {skipped} skipped")
     return lines

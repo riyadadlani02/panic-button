@@ -80,3 +80,32 @@ def test_a_failed_save_of_an_answer_does_not_end_the_guard(guard, monkeypatch):
 
     assert guard.run("--wait", "900", "--passes", "2", asker=Breaking(None)) == 0
     assert any("saving an answer failed" in x for _, x in guard.notes)
+
+
+def test_wait_must_be_finite_and_at_most_a_week(guard, capsys):
+    for w in ("inf", "nan", "604801"):
+        assert guard.run("--wait", w, "--passes", "1") == 1
+        assert "--wait must be at most 604800 seconds (7 days)." in capsys.readouterr().err
+
+
+def test_restart_reopens_one_dialog_per_question_with_its_text(guard):
+    trigger("mail", items=("rule-a",))
+    run(guard, Asker(None))
+    trigger("mail", items=("rule-a", "rule-b"))
+    run(guard, Asker(None))
+    asker = Asker(None)
+    run(guard, asker)
+    texts = sorted(t for _, t, _ in asker.opened)
+    assert len(texts) == 2 and "(rule-a)" in texts[0] and "rule-b" not in texts[0] and "(rule-b)" in texts[1]
+
+
+def test_an_overdue_question_after_a_restart_acts_in_the_first_pass(guard):
+    trigger("mail")
+    run(guard, Asker(None))
+    d = open_vault()
+    for v in d["guard"]["asks"].values():
+        v["deadline"] = 0
+    test_cli.vault.save(test_cli.vpath, d, test_cli.PW, test_cli.kpath.read_bytes())
+    asker = Asker(None)
+    run(guard, asker)
+    assert open_vault()["outcomes"] and asker.opened == []

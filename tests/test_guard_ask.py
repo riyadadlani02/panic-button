@@ -2,19 +2,22 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+from fake import FakeConnector  # noqa: E402
 from test_guard import NOTICE, TRIG, conn  # noqa: E402
 
 from panic.guard import _key, guard_once, new_state  # noqa: E402
 from panic.model import Account, Finding, Severity  # noqa: E402
+from panic.signals import TEXT  # noqa: E402
 
 EV = Finding("mail", "new_device", Severity.TRIGGER, "x", key="e1")
 OTHER = Finding("mail", "changed", Severity.NOTICE, "x", ("b",))
 
 
-def run(c, state, t=1e6, wait=900, dry_run=False, snap=None):
+def run(c, state, t=1e6, wait=900, dry_run=False, got=None):
     acts, asked, accepted = [], [], []
     lines = guard_once([Account("mail", "fake")], [], {"mail": c}, {"mail": {}}, set(), state, "press",
-                       lambda targets, f: acts.append(targets), lambda f, e: None, lambda: None, lambda: t,
+                       lambda targets, f: (acts.append(targets), got is not None and got.append(f)),
+                       lambda f, e: None, lambda: None, lambda: t,
                        dry_run, wait, lambda a, fs, d: asked.append((a, fs, d)), lambda a, s: accepted.append((a, s)))
     return lines, acts, asked, accepted
 
@@ -106,3 +109,85 @@ def test_alert_mode_and_wait_zero_unchanged():
                            lambda: None, lambda: 1e6, False, **({"wait": 900} if kw == {} else kw))
         assert state["asks"] == {}
         assert bool(acts) == (kw != {})
+
+
+def fwd(*items):
+    return Finding("mail", "forwarding_added", Severity.TRIGGER, "x", items)
+
+
+def test_toggling_a_second_item_does_not_move_the_deadline():
+    state, c = new_state(), conn([fwd("a")])
+    run(c, state)
+    for i, f in enumerate([fwd("a", "b"), fwd("a"), fwd("a", "b")], 1):
+        c.findings = [f]
+        assert run(c, state, 1e6 + 300 * i - 1)[1] == []
+    assert run(c, state, 1e6 + 900)[1] == [["mail"]]
+
+
+def test_a_replaced_item_keeps_the_first_deadline():
+    state, c = new_state(), conn([fwd("a")])
+    run(c, state)
+    c.findings = [fwd("b")]
+    assert run(c, state, 1e6 + 300)[1] == []
+    assert run(c, state, 1e6 + 900)[1] == [["mail"]]
+
+
+def boom(account):
+    raise RuntimeError("down")
+
+
+def test_unreadable_account_acts_on_an_overdue_or_locked_question():
+    for answer, t in ((None, 1e6 + 900), ("lock", 1e6 + 10)):
+        state, c = new_state(), conn([TRIG])
+        run(c, state)
+        state["asks"][_key(TRIG)]["answer"] = answer
+        c.snapshot = boom
+        assert run(c, state, t)[1] == [["mail"]] and state["asks"] == {}
+
+
+def test_a_failed_accept_reread_does_not_stop_the_pass():
+    class FailsThirdRead(FakeConnector):
+        reads = 0
+
+        def snapshot(self, account):
+            self.reads += 1
+            if self.reads == 3:
+                raise RuntimeError("down")
+            return {}
+
+    mail, bank = FailsThirdRead(), conn()
+    mail.findings = [NOTICE]
+    state, asked = new_state(), []
+
+    def go(t):
+        return guard_once([Account("mail", "fake"), Account("bank", "fake")], [], {"mail": mail, "bank": bank},
+                          {"mail": {}, "bank": {}}, set(), state, "press", lambda *a: None, lambda f, e: None,
+                          lambda: None, lambda: t, False, 900, lambda a, fs, d: asked.append(a), lambda a, s: None)
+
+    go(1e6)
+    state["asks"][_key(NOTICE)]["answer"] = "accept"
+    bank.findings = [Finding("bank", "key_added", Severity.TRIGGER, "x", ("k",))]
+    lines = go(1e6 + 10)
+    assert asked == ["mail", "bank"] and any(TEXT["unreadable"] in x for x in lines)
+    assert _key(NOTICE) in state["asks"]
+
+
+def test_cooling_account_is_not_asked_and_keeps_the_old_path():
+    state, c = new_state(), conn([TRIG, NOTICE])
+    state["pressed"]["mail"] = 1e6 - 10
+    lines, acts, asked, _ = run(c, state)
+    lines2, acts2, asked2, _ = run(c, state, 1e6 + 900)
+    assert asked == asked2 == [] and state["asks"] == {} and acts == acts2 == []
+    assert "mail: the watch is already handling this" in lines and _key(NOTICE) in state["seen"]
+
+
+def test_lock_on_a_harmless_question_passes_its_finding():
+    state, c, got = new_state(), conn([NOTICE]), []
+    run(c, state)
+    state["asks"][_key(NOTICE)]["answer"] = "lock"
+    assert run(c, state, 1e6 + 10, got=got)[1] == [["mail"]] and got == [[NOTICE]]
+
+
+def test_a_new_question_prints_a_line():
+    lines = run(conn([TRIG]), new_state())[0]
+    assert "ask mail: x It will be pressed at 14:01:40 unless you answer." in lines

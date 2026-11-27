@@ -7,13 +7,14 @@ from datetime import datetime
 from pathlib import Path
 
 from panic import executor
-from panic.guard import _key, guard_once, load_state
+from panic.guard import _from_ask, _key, guard_once, load_state
 from panic.model import Account, Finding, Outcome, Severity, Tier, WatchPolicy
 from panic.session import (ORG_PROVIDERS, CliError, Session, _connectors, _outcomes, _recent_results, _reload,
                            _unguarded, _warn)
 from panic.signals import TEXT
 
 MIN_INTERVAL_S = 30
+MAX_WAIT_S = 7 * 24 * 3600
 # Contain never locks anyone out, and Workspace's delegates step removes every delegate, baselined or not.
 CONTAIN_SKIP = executor.LOCK_ACTIONS | {"delegates"}
 
@@ -34,6 +35,8 @@ def cmd_guard(a) -> int:
         raise CliError(f"--interval must be at least {MIN_INTERVAL_S} seconds.")
     if a.wait < 0:
         raise CliError("--wait must be 0 or more seconds.")
+    if not a.wait <= MAX_WAIT_S:  # also refuses inf and nan
+        raise CliError(f"--wait must be at most {MAX_WAIT_S} seconds (7 days).")
     fd = _lock(a)  # held until the process ends
     try:
         s = Session(a)
@@ -98,22 +101,22 @@ def cmd_guard(a) -> int:
                     if proc is not None:
                         dialogs.append((proc, set(keys)))
 
-                for acct in {v["account"] for v in state["asks"].values()}:  # reloaded questions get a dialog
-                    old = {k: v for k, v in state["asks"].items() if v["account"] == acct and k not in asked
-                           and v["answer"] is None and v["deadline"] > time.time()}
-                    if old:
-                        dialog(acct, [TEXT.get(k.split("|")[1], k) for k in old], any(v["risky"] for v in old.values()),
-                               list(old), min(v["deadline"] for v in old.values()))
+                for k, v in list(state["asks"].items()):  # a reloaded question reopens alone, with the text it showed
+                    if k not in asked and v["answer"] is None and v["deadline"] > time.time():
+                        dialog(v["account"], [v.get("text") or _from_ask(k, v).text], v["risky"], [k],
+                               v["deadline"])
 
                 def asker(acct: str, findings: list[Finding], deadline: float) -> None:
                     risky = any(f.severity is Severity.TRIGGER for f in findings)
                     for f in findings:
+                        state["asks"][_key(f)]["text"] = shown(f)
                         s.log({"event": "guard_question", "account": acct, "code": f.code, "detail": shown(f)})
                     fate = (f"It will be locked at {datetime.fromtimestamp(deadline):%H:%M} unless you answer."
                             if risky else f"It will be accepted at {datetime.fromtimestamp(deadline):%H:%M} unless you answer.")
-                    a.notifier(f"panic: {acct}", " ".join(shown(f) for f in findings) + f" {fate} It was me? Run "
+                    texts = list(dict.fromkeys(shown(f) for f in findings))  # org items share one text
+                    a.notifier(f"panic: {acct}", " ".join(texts) + f" {fate} It was me? Run "
                                f"`panic rehearse`. Lock it? Run `panic press --user {acct}`.")
-                    dialog(acct, [shown(f) for f in findings], risky, [_key(f) for f in findings], deadline)
+                    dialog(acct, texts, risky, [_key(f) for f in findings], deadline)
 
                 def accepted(acct: str, snap) -> None:
                     s.update(lambda d: d["baselines"].__setitem__(acct, snap))

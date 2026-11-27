@@ -11,6 +11,7 @@ def test_rule_codes():
     assert gmail_rule_code(rule(addLabelIds=["TRASH"]), None) == "rule_hides_mail"
     assert gmail_rule_code(rule(removeLabelIds=["INBOX", "UNREAD"]), None) == "rule_hides_mail"
     assert gmail_rule_code(rule(addLabelIds=["STARRED"]), None) is None
+    assert gmail_rule_code(rule(removeLabelIds=["INBOX"]), None) == "rule_hides_mail"  # skip the inbox
     assert gmail_rule_code("not json", None) == "rule_hides_mail"
 
 def test_drift_splits_triggers_from_notices():

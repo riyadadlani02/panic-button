@@ -48,7 +48,7 @@ def gmail_rule_code(item: str, own_domain: str | None) -> str | None:
         if forward and (own_domain is None or forward.rpartition("@")[2].lower() != own_domain.lower()):
             return "rule_forwards_outside"
         add, remove = action.get("addLabelIds") or [], action.get("removeLabelIds") or []
-        if "TRASH" in add or {"INBOX", "UNREAD"} <= set(remove):
+        if "TRASH" in add or "INBOX" in remove:  # skip-inbox too: unanswered harmless changes are accepted
             return "rule_hides_mail"
     except (ValueError, AttributeError, TypeError):
         return "rule_hides_mail"  # fail closed: a rule we cannot read may hide mail
