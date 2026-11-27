@@ -174,8 +174,9 @@ $("unlock-form").addEventListener("submit", async (e) => {
   let r;
   try { r = await api().unlock(pass.value, $("remember").checked); } catch (err) { r = { ok: false, error: "Could not reach the app." }; }
   $("btn-unlock").disabled = false;
-  if (r && r.ok) { pass.value = ""; clientLocked = false; stateSig = ""; await refresh(); }
-  else { $("unlock-error").textContent = (r && r.error) || "That passphrase did not work."; pass.select(); }
+  pass.value = "";
+  if (r && r.ok) { clientLocked = false; stateSig = ""; await refresh(); }
+  else { $("unlock-error").textContent = (r && r.error) || "That passphrase did not work."; pass.focus(); }
 });
 $("btn-setup").addEventListener("click", () => startJob("setup"));
 
@@ -323,7 +324,7 @@ async function pollJob(j) {
 }
 function finishJob(j, code) {
   j.done = true;
-  $("job-prompt").hidden = true;
+  $("job-prompt").hidden = true; $("jp-input").value = "";
   $("job-status").textContent = j.cancelled ? "Stopped. Exit status " + code + "." : code === 0 ? "Finished. Exit status 0." : "Finished with a problem. Exit status " + code + ".";
   $("job-cancel").hidden = true;
   $("job-close").hidden = false; $("job-x").disabled = false;
@@ -336,8 +337,11 @@ function finishJob(j, code) {
 function classify(p) {
   if (p.secret) return { type: "secret" };
   const t = p.text.trim();
-  const yn = /\[y\/n(\/u)?\]\s*[:?]?$/i.exec(t);
-  if (yn) return { type: yn[1] ? "ynu" : "yn" };
+  const yn = /\[(y\/n(\/u)?)\]\s*[:?]?$/i.exec(t);
+  if (yn) {   // the capital letter is the default; none capitalised means no default
+    const d = yn[1][0] === "Y" ? "y" : yn[1][2] === "N" ? "n" : null;
+    return { type: yn[2] ? "ynu" : "yn", def: d };
+  }
   const num = /\[(\d+)\s*-\s*(\d+)\]\s*[:?]?$/.exec(t);
   if (num && +num[2] >= +num[1] && +num[2] - +num[1] < 20) return { type: "num", lo: +num[1], hi: +num[2] };
   return { type: "text" };
@@ -351,22 +355,28 @@ function showPrompt(j, p) {
   const answer = (value, shown) => {
     if (j.promptId !== p.id) return;
     j.promptId = null;
+    input.value = "";   // never leave a typed passphrase in the DOM
     $("job-prompt").hidden = true;
     out((p.secret ? "••••••" : shown !== undefined ? shown : value) + "\n");
     api().job_answer(p.id, value);
-    $("job-cancel").focus();
+    // Focus the output and pause Cancel so a double Enter or double click cannot stop the job.
+    const c = $("job-cancel");
+    c.disabled = true; setTimeout(() => { if (job && !job.done && !job.cancelled) c.disabled = false; }, 400);
+    $("job-out").focus();
   };
   const btn = (label, value, def) => {
     const b = el("button", { type: "button", text: label, class: def ? "default" : "" });
+    if (def) first = b;
     b.addEventListener("click", () => answer(value, label)); box.append(b); return b;
   };
   input.hidden = kind.type !== "text" && kind.type !== "secret";
   input.type = kind.type === "secret" ? "password" : "text";
   input.setAttribute("aria-label", p.text.trim());
-  let first;
-  if (kind.type === "yn") { first = btn("Yes", "y", true); btn("No", "n"); }
-  else if (kind.type === "ynu") { first = btn("Yes", "y", true); btn("No", "n"); btn("Unsure", "u"); }
-  else if (kind.type === "num") { for (let i = kind.lo; i <= kind.hi; i++) { const b = btn(String(i), String(i)); b.style.minWidth = "36px"; first = first || b; } }
+  let first = $("jp-text");   // no default button: focus the text so a stray Enter does nothing
+  $("jp-text").tabIndex = -1;
+  if (kind.type === "yn") { btn("Yes", "y", kind.def === "y"); btn("No", "n", kind.def === "n"); }
+  else if (kind.type === "ynu") { btn("Yes", "y", kind.def === "y"); btn("No", "n", kind.def === "n"); btn("Unsure", "u"); }
+  else if (kind.type === "num") { for (let i = kind.lo; i <= kind.hi; i++) btn(String(i), String(i)).style.minWidth = "36px"; }
   else {
     const ok = el("button", { type: "submit", class: "default", text: "OK" }); box.append(ok);
     first = input;
@@ -379,6 +389,8 @@ function showPrompt(j, p) {
 }
 $("job-cancel").addEventListener("click", async () => {
   if (!job || job.done) return;
+  if (!(await confirmBox("Stop this job?"))) return;
+  if (job.done) return;
   job.cancelled = true; $("job-cancel").disabled = true;
   $("job-status").textContent = "Stopping…";
   await api().job_cancel();
