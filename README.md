@@ -133,6 +133,11 @@ PYTHONPATH=. uv run python demo/all_services_demo.py [--json run.json]
 
 ## Setup: personal Gmail
 
+
+**One click.** When this copy of panic button ships with built-in sign-in apps, run `uv run panic arm --personal` (or `panic setup`). Your browser opens; sign in and click Allow. The rest is the same as below.
+
+**Your own credentials.** The route below uses a Google client that you create.
+
 1. In Google Cloud Console create a project, enable the Gmail API, configure the OAuth consent screen and add yourself as a test user.
 2. Create an OAuth client of type "Desktop app" and download its JSON file. Use your own client; nothing is shared with anyone else. An app left in "Testing" issues refresh tokens that expire after seven days: publish the app, or reconnect weekly.
 3. Arm the account. You are asked whether you hold a recovery method that does not depend on that mailbox (printed backup codes or a security key); without one, arming is refused.
@@ -153,6 +158,8 @@ The OAuth client is kept in the vault from the first arm, so `--client-secrets` 
 
 ## Setup: Google Workspace
 
+Workspace keeps the admin setup below.
+
 1. Create a service account, enable domain-wide delegation for it, and download its JSON key.
 2. In the Admin console authorise the service account's client ID for these four scopes, which every press needs: Admin SDK directory user security, Admin SDK directory user (read/write), Gmail settings basic, Gmail settings sharing. Add a fifth, Admin SDK reports audit (read-only), for the guard to read sign-in alerts; it is requested only for that read, so a press works without it. The exact scope URLs are listed in `panic/google_workspace.py`.
 3. Use a dedicated break-glass admin account. It is the identity the tool acts as and is never a target, even with `--all`.
@@ -167,6 +174,8 @@ Delete the service-account JSON once armed: it is a tenant-wide key, and the vau
 
 ## Setup: Microsoft 365 tenant
 
+Microsoft 365 keeps the admin setup below.
+
 1. In the Entra admin centre create an app registration in your own tenant and add a client secret. Save the secret alone in a text file.
 2. Add these Microsoft Graph application permissions and grant admin consent. They are taken from the calls the tool makes and have not been confirmed on a real tenant: `User.ReadWrite.All` (block sign-in, revoke sessions), `MailboxSettings.ReadWrite` (inbox rules, which are read as settings, never as mail), `DelegatedPermissionGrant.ReadWrite.All` (a user's app consents), `UserAuthenticationMethod.Read.All`, `IdentityRiskEvent.Read.All` (risk detections, which need Entra ID P1 or P2; without the licence the guard shows one notice and skips them) and `Directory.Read.All` (users and domains).
 3. Choose a break-glass admin. It is protected and never a target.
@@ -179,6 +188,11 @@ Every user in the tenant is armed and baselines are recorded without printing th
 
 ## Setup: personal Microsoft (Outlook.com, Hotmail)
 
+
+**One click.** When this copy ships with built-in sign-in apps, run `uv run panic arm --microsoft-personal` (or `panic setup`). Your browser opens; sign in and click Allow.
+
+**Your own credentials.** The route below uses a registration that you create.
+
 1. In Microsoft Entra (app registrations) create your own registration that accepts personal Microsoft accounts, add a "Mobile and desktop" redirect to `http://localhost`, allow public client flows, and add the delegated permission `MailboxSettings.ReadWrite` only. Whether Microsoft lets an unverified publisher get it for a personal account is unconfirmed.
 2. Arm. You are asked whether you hold a recovery method that does not depend on that mailbox.
 
@@ -189,6 +203,11 @@ uv run panic --keyfile ~/panic.key arm --microsoft-personal you@outlook.com --cl
 Changing your password disconnects the tool. Straight after, run `uv run panic arm --microsoft-personal you@outlook.com --reconnect` (the client id is kept in the vault).
 
 ## Setup: GitHub
+
+
+**One click.** When this copy ships with built-in sign-in apps, run `uv run panic arm --github` (or `panic setup`). The tool shows a code and opens GitHub; enter the code and click Authorize. It asks for the same scopes as the token below.
+
+**Your own token.** The route below uses a classic token that you create.
 
 1. Create a classic personal access token (not fine-grained; fine-grained tokens cannot reach several of the endpoints) and save it alone in a text file. Scopes, taken from the endpoints the tool calls and not yet confirmed: `repo`, `admin:public_key`, `admin:gpg_key`, `admin:ssh_signing_key`, `user` (to list and remove email addresses), `admin:repo_hook`. For an organisation also `admin:org` and `admin:org_hook`; you must be an active owner of it.
 2. Arm. You are asked whether you hold a recovery method that does not depend on that account.
@@ -202,6 +221,8 @@ An organisation is armed as its own account (`org:NAME`). The tool refuses a tok
 
 ## Setup: Slack
 
+Slack keeps the admin setup below.
+
 1. Create your own Slack app in the workspace and install it as the primary owner. Save its token alone in a text file. Scopes and Slack-plan access are taken from the calls the tool makes and are not confirmed: `users:read` and `users:read.email` (to list members and find the primary owner), `admin.users:write` (Enterprise Grid session reset), `auditlogs:read` (Enterprise Grid audit log), and on Business+ a token that can use SCIM and read `team.accessLogs`.
 2. Arm.
 
@@ -210,6 +231,22 @@ uv run panic --keyfile ~/panic.key arm --slack --token-file token.txt
 ```
 
 The tool finds the plan itself and prints what it can do on it. If it cannot tell, it refuses to arm rather than guess a lower plan. The primary owner is protected. Every other member is armed. Slack members are named `slack:<email>` (for example `panic release --user slack:ann@example.com`), so they never clash with the same address in Workspace or Microsoft 365. Arming adds no edge between a mailbox and its Slack member, so a trigger on the mailbox does not press the member.
+
+## For the seller: built-in sign-in apps
+
+The one-click routes use sign-in apps that you register once and ship with the tool. Register these, then put the IDs in `panic/oauth_clients.json`.
+
+- **Google.** Create a Cloud project and enable the Gmail API. Put the consent screen in production. Create an OAuth client of type "Desktop app". Google may require app verification for the Gmail settings scopes.
+- **Microsoft.** Register an app that accepts any organisation and personal accounts. Turn on public client flows and add a "Mobile and desktop" redirect to `http://localhost`. Add the delegated permission `MailboxSettings.ReadWrite`. Publisher verification is recommended.
+- **GitHub.** Create an OAuth App and enable device flow. No secret is needed.
+
+In `panic/oauth_clients.json`:
+
+- `google`: the downloaded Desktop-app JSON object, as it is.
+- `microsoft`: the client ID, as a string.
+- `github`: the client ID, as a string.
+
+To test with another file, set `PANIC_OAUTH_CLIENTS=/path/to/file.json`. Rebuild the app afterwards with `scripts/build-mac-app.sh` so the IDs are bundled.
 
 ## Setup: any other service (guided)
 
