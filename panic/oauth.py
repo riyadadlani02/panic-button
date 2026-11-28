@@ -7,6 +7,8 @@ from importlib.resources import files
 from pathlib import Path
 from urllib.parse import urlencode
 
+from panic.session import CliError
+
 DEVICE_CODE_URL = "https://github.com/login/device/code"
 TOKEN_URL = "https://github.com/login/oauth/access_token"
 GRANT = "urn:ietf:params:oauth:grant-type:device_code"
@@ -18,8 +20,15 @@ GITHUB_ORG_SCOPES = "admin:org,admin:org_hook"
 def builtin(name: str):
     """The shipped client for google, microsoft or github; None while unset. PANIC_OAUTH_CLIENTS names another file."""
     path = os.environ.get("PANIC_OAUTH_CLIENTS")
-    raw = Path(path).expanduser().read_text() if path else (files("panic") / "oauth_clients.json").read_text()
-    return json.loads(raw).get(name)
+    where = f"PANIC_OAUTH_CLIENTS {path}" if path else "panic/oauth_clients.json"
+    try:
+        clients = json.loads(Path(path).expanduser().read_text() if path else
+                             (files("panic") / "oauth_clients.json").read_text())
+    except (OSError, ValueError) as e:
+        raise CliError(f"{where}: could not read it: {e}")
+    if not isinstance(clients, dict):
+        raise CliError(f"{where}: expected a JSON object of sign-in app IDs")
+    return clients.get(name)
 
 
 def _post(url: str, fields: dict) -> dict:

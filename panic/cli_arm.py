@@ -147,8 +147,10 @@ def _arm_microsoft_personal(a) -> int:
         s = Session(a)
         if email:
             _refuse_unarmed(s, email, prov)
-        client_id = (a.client_id or s.data["credentials"].get(prov, {}).get(email, {}).get("client_id")
-                     or oauth.builtin("microsoft"))
+        stored = s.data["credentials"].get(prov, {})
+        # With no address the account is known only after sign-in: use the stored ID when every account shares one.
+        ids = {stored.get(email, {}).get("client_id")} if email else {c.get("client_id") for c in stored.values()}
+        client_id = a.client_id or (ids.pop() if len(ids) == 1 else None) or oauth.builtin("microsoft")
         if not client_id:
             raise CliError("--client-id ID is required to sign in.")
         token, email = _ms_sign_in(a, client_id, email)

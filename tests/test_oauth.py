@@ -3,6 +3,7 @@ import json
 import pytest
 
 from panic import oauth
+from panic.session import CliError
 
 CODE = {"device_code": "dc", "user_code": "ABCD-1234", "verification_uri": "https://github.com/login/device",
         "expires_in": 900, "interval": 5}
@@ -19,6 +20,16 @@ def test_the_env_file_overrides_the_shipped_one(tmp_path, monkeypatch):
     monkeypatch.setenv("PANIC_OAUTH_CLIENTS", str(p))
     assert oauth.builtin("github") == "gh-id" and oauth.builtin("google") == {"installed": {"client_id": "g"}}
     assert oauth.builtin("microsoft") is None
+
+
+@pytest.mark.parametrize("text", [None, "{not json", "[1, 2]"])
+def test_a_missing_malformed_or_non_object_env_file_is_one_clear_error(tmp_path, monkeypatch, text):
+    p = tmp_path / "clients.json"
+    if text is not None:
+        p.write_text(text)
+    monkeypatch.setenv("PANIC_OAUTH_CLIENTS", str(p))
+    with pytest.raises(CliError, match=f"PANIC_OAUTH_CLIENTS {p}"):
+        oauth.builtin("github")
 
 
 def flow(replies, sleep=None):

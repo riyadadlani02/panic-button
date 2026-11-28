@@ -185,3 +185,16 @@ def test_personal_arm_with_no_builtin_id_still_needs_the_client_id(bare, monkeyp
     monkeypatch.delenv("PANIC_OAUTH_CLIENTS", raising=False)
     rc = cli("arm", "--microsoft-personal", answers=["y"], ms_authorize=lambda *a, **k: pytest.fail("signed in"))
     assert rc == 1 and "--client-id ID is required" in capsys.readouterr().err
+
+
+def test_a_bare_reconnect_uses_the_stored_client_id_before_the_builtin_one(bare, monkeypatch):
+    ms_arm(answers=["y", "y"])
+    builtin_clients(monkeypatch, bare, microsoft="shipped-id")
+    calls = []
+
+    def authorize(client_id, login_hint=None):
+        calls.append((client_id, login_hint))
+        return {"client_id": client_id, "cache": "c2", "username": "me@outlook.com"}
+
+    assert cli("arm", "--microsoft-personal", "--reconnect", ms_authorize=authorize) == 0
+    assert calls == [("cid", None)]

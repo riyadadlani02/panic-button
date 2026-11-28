@@ -101,3 +101,11 @@ def test_setup_arms_gmail_with_the_builtin_client(armed, monkeypatch):
                whoami=lambda token: "me@x.test",
                connectors={"google_personal": FakeConnector(provider="google_personal")}) == 0
     assert {"id": "me@x.test", "provider": "google_personal", "protected": False} in open_vault()["accounts"]
+
+
+def test_a_broken_clients_file_is_an_error_in_setup_not_a_crash(armed, monkeypatch, capsys):
+    p = test_cli.vpath.parent.parent / "clients.json"
+    p.write_text("{not json")
+    monkeypatch.setenv("PANIC_OAUTH_CLIENTS", str(p))
+    assert cli("setup", answers=["1", "n"]) == 1
+    assert "PANIC_OAUTH_CLIENTS" in capsys.readouterr().err
