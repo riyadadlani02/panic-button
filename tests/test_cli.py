@@ -351,6 +351,54 @@ def test_reconnect_replaces_only_the_token(armed):
     assert after["accounts"] == before["accounts"] and after["baselines"] == before["baselines"]
 
 
+def builtin_clients(monkeypatch, tmp_path, **ids):
+    """The sign-in apps the tool ships with, as `PANIC_OAUTH_CLIENTS` names them."""
+    p = tmp_path / "oauth_clients.json"
+    p.write_text(json.dumps(ids))
+    monkeypatch.setenv("PANIC_OAUTH_CLIENTS", str(p))
+
+
+BUILTIN = {"installed": {"client_id": "shipped"}}
+
+
+def test_arm_personal_with_no_address_uses_the_builtin_client_and_arms_the_signed_in_address(bare, monkeypatch):
+    builtin_clients(monkeypatch, bare, google=BUILTIN)
+    calls = []
+    rc = cli("arm", "--personal", connectors={"google_personal": FakeConnector(provider="google_personal")},
+             authorize=lambda cfg, login_hint=None: calls.append((cfg, login_hint)) or {"t": 1},
+             whoami=lambda token: "Me@Example.com", answers=["y", "y"])
+    d = open_vault()
+    assert rc == 0 and calls == [(BUILTIN, None)]
+    assert d["accounts"] == [{"id": "me@example.com", "provider": "google_personal", "protected": False}]
+    assert d["credentials"]["google_personal"] == {"me@example.com": {"t": 1}} and d["credentials"]["google_client"] == BUILTIN
+
+
+def test_arm_personal_with_no_address_refuses_a_signed_in_address_armed_under_another_provider(armed, monkeypatch, capsys):
+    builtin_clients(monkeypatch, vpath.parent.parent, google=BUILTIN)
+    rc = cli("arm", "--personal", authorize=lambda cfg, login_hint=None: {"t": 1}, whoami=lambda token: "MAIL",
+             answers=["y", "y", ""])
+    assert rc == 1 and "already armed" in capsys.readouterr().err
+    assert "google_personal" not in open_vault()["credentials"]
+
+
+def test_reconnect_with_no_address_reconnects_the_signed_in_account(armed):
+    cli("arm", "--personal", "new@x.com", "--client-secrets", str(cs),
+        connectors={"google_personal": FakeConnector(provider="google_personal")},
+        authorize=lambda cfg, login_hint=None: {"t": 1}, answers=["y", "y", ""])
+    calls = []
+    assert cli("arm", "--personal", "--reconnect", whoami=lambda token: "New@x.com",
+               authorize=lambda cfg, login_hint=None: calls.append((cfg, login_hint)) or {"t": 2}) == 0
+    assert calls == [(CLIENT, None)] and open_vault()["credentials"]["google_personal"]["new@x.com"] == {"t": 2}
+
+
+def test_arm_personal_with_no_builtin_client_still_needs_the_client_file(bare, monkeypatch, capsys):
+    monkeypatch.delenv("PANIC_OAUTH_CLIENTS", raising=False)
+    calls = []
+    assert cli("arm", "--personal", whoami=lambda t: "x@y.z", answers=["y"],
+               authorize=lambda cfg, login_hint=None: calls.append(cfg)) == 1
+    assert calls == [] and "--client-secrets FILE is required" in capsys.readouterr().err and not vpath.exists()
+
+
 class FakeWorkspace(FakeConnector):
     def __init__(self, users, snaps):
         super().__init__(provider="google_workspace", steps=_steps())

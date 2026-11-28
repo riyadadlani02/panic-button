@@ -1,7 +1,8 @@
 from unittest.mock import patch
 
 import pytest
-from test_cli import armed, bare, cli, open_vault  # noqa: F401
+from fake import FakeConnector
+from test_cli import BUILTIN, armed, bare, builtin_clients, cli, open_vault  # noqa: F401
 
 import test_cli
 from panic import cli_setup
@@ -71,3 +72,32 @@ def test_another_service_question_is_grouped():
     from panic.guided import grouped_services
     q = next(s for s in cli_setup.SERVICES if s[0] == "other")[5][0][1]
     assert grouped_services() in q
+
+
+def test_with_builtin_ids_the_sign_in_services_ask_nothing_and_open_no_pages(tmp_path, monkeypatch, capsys):
+    builtin_clients(monkeypatch, tmp_path, google=BUILTIN, microsoft="m", github="g")
+    opened = []
+    assert [ask(k, [], opened) for k in ("gmail", "outlook", "github")] == \
+           [["--personal"], ["--microsoft-personal"], ["--github"]]
+    out = capsys.readouterr().out
+    assert opened == [] and out.count("Your browser will open. Sign in and click Allow.") == 3
+    assert "console.cloud.google.com" not in out and "Entra" not in out
+
+
+def test_with_builtin_ids_unset_the_steps_and_questions_are_unchanged(tmp_path, monkeypatch):
+    monkeypatch.delenv("PANIC_OAUTH_CLIENTS", raising=False)
+    client = tmp_path / "client.json"
+    client.write_text("{}")
+    opened = []
+    assert ask("gmail", ["y", "", "me@x.test", str(client)], opened) == \
+           ["--personal", "me@x.test", "--client-secrets", str(client)]
+    assert len(opened) == 2
+
+
+def test_setup_arms_gmail_with_the_builtin_client(armed, monkeypatch):
+    builtin_clients(monkeypatch, test_cli.vpath.parent.parent, google=BUILTIN)
+    # menu 1 = gmail; arm's recovery and baseline questions; who can reset it; no further account
+    assert cli("setup", answers=["1", "y", "y", "", "n"], authorize=lambda cfg, login_hint=None: {"t": 1},
+               whoami=lambda token: "me@x.test",
+               connectors={"google_personal": FakeConnector(provider="google_personal")}) == 0
+    assert {"id": "me@x.test", "provider": "google_personal", "protected": False} in open_vault()["accounts"]

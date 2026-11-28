@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from panic import executor, google_personal, microsoft_personal
+from panic import executor, google_personal, microsoft_personal, oauth
 from panic.model import Account, Step
 from panic.session import ORG_PROVIDERS, RULE_CATEGORIES, YES, CliError, Session, _connectors, _redact, _unguarded, _unprotected, _upsert, _warn, _yes
 
@@ -24,17 +24,20 @@ def _client_config(a) -> dict:
         raise CliError(f"could not read the OAuth client file {a.client_secrets}: {e}")
 
 
-def _sign_in(a, config: dict, email: str) -> dict:
+def _sign_in(a, config: dict, email: str) -> tuple[dict, str]:
+    """The token and the address it is for; with no email, whichever account the owner signed in with."""
     try:
-        token = a.authorize(config, login_hint=email)
+        token = a.authorize(config, login_hint=email or None)
         who = a.whoami(token)
     except Exception as e:
         raise CliError(f"sign-in failed: {e}")
+    if not email:
+        return token, who.lower()
     if who.casefold() != email.casefold():  # the chooser lets the owner pick any account
         raise CliError(f"signed in as {who}, not {email}; nothing was stored. Gmail treats dotted and "
                        "googlemail.com variants as the same mailbox, but they must be typed here exactly as "
                        "Google shows the primary address.")
-    return token
+    return token, email
 
 
 def _print_snapshot(snap: dict) -> None:
@@ -62,31 +65,45 @@ def _pick_resetters(s: Session, acct_id: str) -> list[str]:
     return picks
 
 
+def _refuse_other(s: Session, acct_id: str, provider: str) -> None:
+    existing = next((x for x in s.accounts if x.id == acct_id), None)
+    if existing and (existing.protected or existing.provider != provider):
+        raise CliError(f"{acct_id} is already armed ({"protected, " if existing.protected else ""}{existing.provider}); refusing to replace it.")
+
+
+def _refuse_unarmed(s: Session, acct_id: str, provider: str) -> None:
+    if not any(x.id == acct_id and x.provider == provider for x in s.accounts):
+        raise CliError(f"{acct_id} is not armed. Arm it first, without --reconnect.")
+
+
 def _arm_personal(a) -> int:
-    email = a.personal.lower()
+    email = a.personal.lower()  # "" when the address is to come from the sign-in
     if a.reconnect:
         s = Session(a)
-        if not any(x.id == email and x.provider == "google_personal" for x in s.accounts):
-            raise CliError(f"{email} is not armed. Arm it first, without --reconnect.")
-        stored = s.data["credentials"].get("google_client")
-        if not (a.client_secrets or stored):
+        if email:
+            _refuse_unarmed(s, email, "google_personal")
+        config = (_client_config(a) if a.client_secrets else s.data["credentials"].get("google_client")
+                  or oauth.builtin("google"))
+        if not config:
             raise CliError("--client-secrets FILE is required to sign in.")
-        token = _sign_in(a, _client_config(a) if a.client_secrets else stored, email)
+        token, email = _sign_in(a, config, email)
+        _refuse_unarmed(s, email, "google_personal")
         s.update(lambda d: _set_token(d, email, token))
         print(f"Reconnected {email}.")
         return 0
-    if not a.client_secrets:
+    config = _client_config(a) if a.client_secrets else oauth.builtin("google")
+    if not config:
         raise CliError("--client-secrets FILE is required to sign in.")
-    config = _client_config(a)
-    if not _yes(f"Do you hold a way to recover {email} that does not depend on {email} itself "
+    who = email or "the Google account you sign in with"
+    if not _yes(f"Do you hold a way to recover {who} that does not depend on {email or 'it'} itself "
                 "(printed backup codes or a security key)?"):
-        _warn(f"Not armed: set up a recovery method for {email} that does not depend on it, then arm again.")
+        _warn(f"Not armed: set up a recovery method for {who} that does not depend on it, then arm again.")
         return 1
     s = Session(a, create=True)
-    existing = next((x for x in s.accounts if x.id == email), None)
-    if existing and (existing.protected or existing.provider != "google_personal"):
-        raise CliError(f"{email} is already armed ({"protected, " if existing.protected else ""}{existing.provider}); refusing to replace it.")
-    token = _sign_in(a, config, email)
+    if email:  # known before signing in: refuse without a needless sign-in
+        _refuse_other(s, email, "google_personal")
+    token, email = _sign_in(a, config, email)
+    _refuse_other(s, email, "google_personal")
     account = Account(email, "google_personal")
     try:
         conn = (a.connectors or {}).get("google_personal") or google_personal.Personal({email: token})
@@ -110,41 +127,48 @@ def _arm_personal(a) -> int:
     return 0
 
 
-def _ms_sign_in(a, client_id: str, email: str) -> dict:
+def _ms_sign_in(a, client_id: str, email: str) -> tuple[dict, str]:
+    """The token and the address it is for; with no email, whichever account the owner signed in with."""
     try:
-        token = a.ms_authorize(client_id, login_hint=email)
+        token = a.ms_authorize(client_id, login_hint=email or None)
     except Exception as e:
         raise CliError(f"sign-in failed: {e}")
     who = token.get("username") or ""
-    if who.casefold() != email.casefold():  # the sign-in lets the owner pick any account
+    if not email and not who:
+        raise CliError("signed in, but Microsoft did not say which account; nothing was stored.")
+    if email and who.casefold() != email.casefold():  # the sign-in lets the owner pick any account
         raise CliError(f"signed in as {who or 'an unknown account'}, not {email}; nothing was stored.")
-    return token
+    return token, who.lower()
 
 
 def _arm_microsoft_personal(a) -> int:
-    email, prov = a.microsoft_personal.lower(), "microsoft_personal"
+    email, prov = a.microsoft_personal.lower(), "microsoft_personal"  # email "" comes from the sign-in
     if a.reconnect:
         s = Session(a)
-        if not any(x.id == email and x.provider == prov for x in s.accounts):
-            raise CliError(f"{email} is not armed. Arm it first, without --reconnect.")
-        client_id = a.client_id or s.data["credentials"].get(prov, {}).get(email, {}).get("client_id")
+        if email:
+            _refuse_unarmed(s, email, prov)
+        client_id = (a.client_id or s.data["credentials"].get(prov, {}).get(email, {}).get("client_id")
+                     or oauth.builtin("microsoft"))
         if not client_id:
             raise CliError("--client-id ID is required to sign in.")
-        token = _ms_sign_in(a, client_id, email)
+        token, email = _ms_sign_in(a, client_id, email)
+        _refuse_unarmed(s, email, prov)
         s.update(lambda d: _set_token(d, email, token, prov))
         print(f"Reconnected {email}.")
         return 0
-    if not a.client_id:
+    client_id = a.client_id or oauth.builtin("microsoft")
+    if not client_id:
         raise CliError("--client-id ID is required to sign in.")
-    if not _yes(f"Do you hold a way to recover {email} that does not depend on {email} itself "
+    who = email or "the Microsoft account you sign in with"
+    if not _yes(f"Do you hold a way to recover {who} that does not depend on {email or 'it'} itself "
                 "(a Microsoft recovery code or a security key)?"):
-        _warn(f"Not armed: set up a recovery method for {email} that does not depend on it, then arm again.")
+        _warn(f"Not armed: set up a recovery method for {who} that does not depend on it, then arm again.")
         return 1
     s = Session(a, create=True)
-    existing = next((x for x in s.accounts if x.id == email), None)
-    if existing and (existing.protected or existing.provider != prov):
-        raise CliError(f"{email} is already armed ({"protected, " if existing.protected else ""}{existing.provider}); refusing to replace it.")
-    token = _ms_sign_in(a, a.client_id, email)
+    if email:
+        _refuse_other(s, email, prov)
+    token, email = _ms_sign_in(a, client_id, email)
+    _refuse_other(s, email, prov)
     account = Account(email, prov)
     try:
         conn = (a.connectors or {}).get(prov) or microsoft_personal.MicrosoftPersonal({email: token})
@@ -334,30 +358,47 @@ def _arm_slack(a) -> int:
     return rc
 
 
+def _github_sign_in(a, client_id: str) -> str:
+    scopes = oauth.GITHUB_SCOPES + ("," + oauth.GITHUB_ORG_SCOPES if a.org else "")
+    try:
+        return oauth.github_device_token(client_id, scopes, sleep=a.sleep)
+    except Exception as e:
+        raise CliError(f"GitHub sign-in failed: {e}")
+
+
 def _arm_github(a) -> int:
     from panic.github import GitHub
-    if not a.token_file:
+    client_id = None if a.token_file else oauth.builtin("github")
+    if not (a.token_file or client_id):
         raise CliError("--github needs --token-file FILE.")
-    token = _read_token(a)
-    login = a.github.lower()
-    acct_id = f"org:{a.org.lower()}" if a.org else login
-    account = Account(acct_id, "github")
-    reconnect = bool(a.reconnect)
-    if not reconnect and not _yes(f"Do you hold a way to recover {login} that does not depend on {login} itself "
+    token = _read_token(a) if a.token_file else None
+    login = a.github.lower()  # "" when the login is to come from the sign-in
+    key = f"org:{a.org.lower()}" if a.org else login  # the account id, once the login is known
+    reconnect, who_q = bool(a.reconnect), login or "the GitHub account you sign in with"
+    if not reconnect and not _yes(f"Do you hold a way to recover {who_q} that does not depend on {login or 'it'} itself "
                                   "(printed recovery codes or a security key)?"):
-        _warn(f"Not armed: set up a recovery method for {login} that does not depend on it, then arm again.")
+        _warn(f"Not armed: set up a recovery method for {who_q} that does not depend on it, then arm again.")
         return 1
     s = Session(a) if reconnect else Session(a, create=True)
-    existing = next((x for x in s.accounts if x.id == acct_id), None)
-    if reconnect and not (existing and existing.provider == "github"):
-        raise CliError(f"{acct_id} is not armed. Arm it first, without --reconnect.")
-    if existing and (existing.protected or existing.provider != "github"):
-        raise CliError(f"{acct_id} is already armed ({'protected, ' if existing.protected else ''}{existing.provider}); refusing to replace it.")
-    conn = (a.connectors or {}).get("github") or GitHub({acct_id: token})
+
+    def check(acct_id: str) -> None:
+        if reconnect:
+            _refuse_unarmed(s, acct_id, "github")
+        _refuse_other(s, acct_id, "github")
+
+    if key:  # known before signing in: refuse without a needless sign-in
+        check(key)
+    token = token or _github_sign_in(a, client_id)
+    conn = (a.connectors or {}).get("github") or GitHub({key: token})
     try:
-        who = conn.login(acct_id)
-        if who.casefold() != login.casefold():
+        who = conn.login(key)
+        if login and who.casefold() != login.casefold():
             raise CliError(f"the token belongs to {who}, not {login}; nothing was stored.")
+        acct_id = key or who.lower()
+        if not key:
+            check(acct_id)
+            conn = (a.connectors or {}).get("github") or GitHub({acct_id: token})
+        account = Account(acct_id, "github")
         if a.org and not conn.is_org_admin(account):
             raise CliError(f"{who} is not an active admin of {a.org}; nothing was stored.")
     except CliError:
@@ -397,11 +438,11 @@ def cmd_arm(a) -> int:
         return _arm_microsoft(a)
     if a.slack:
         return _arm_slack(a)
-    if a.github:
+    if a.github is not None:  # "" asks for the login to come from the sign-in
         return _arm_github(a)
-    if a.personal:
+    if a.personal is not None:
         return _arm_personal(a)
-    if a.microsoft_personal:
+    if a.microsoft_personal is not None:
         return _arm_microsoft_personal(a)
     raise CliError("Give --personal EMAIL, --microsoft-personal EMAIL, --workspace, --microsoft-tenant TENANT, --slack, --github LOGIN or --guided KEY.")
 

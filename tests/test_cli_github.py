@@ -1,5 +1,8 @@
-from test_cli import armed, bare, cli, open_vault  # noqa: F401
+import pytest
+from test_cli import armed, bare, builtin_clients, cli, open_vault  # noqa: F401
 from test_github import FakeApi, gh, personal_api
+
+from panic import oauth
 
 SECRET = "ghp_supersecrettoken"
 
@@ -123,3 +126,54 @@ def test_guard_adopts_categories_an_old_baseline_lacks_once_and_keeps_guarding(a
     events = [json.loads(ln)["event"] for ln in test_cli.log_path.read_text().splitlines()]
     assert events.count("baseline_extended") == 1 and "guard_notice" not in events and "guard_trigger" not in events
     assert test_cli.open_vault()["baselines"]["me"]["runners"] == ["11:21: build-box"]
+
+
+def device_flow(monkeypatch, tmp_path):
+    builtin_clients(monkeypatch, tmp_path, github="shipped-id")
+    seen = {}
+
+    def device(client_id, scopes, **kw):
+        seen.update(client_id=client_id, scopes=scopes, **kw)
+        return SECRET
+
+    monkeypatch.setattr(oauth, "github_device_token", device)
+    return seen
+
+
+def test_arm_with_no_token_file_signs_in_on_github_and_takes_the_login_from_it(armed, tmp_path, monkeypatch, capsys):
+    seen = device_flow(monkeypatch, tmp_path)
+    api = personal_api()
+    api.objs["/user"] = {"login": "Me"}
+    sleep = lambda s: None  # noqa: E731
+    assert cli("arm", "--github", answers=("y", "y", "mail"), connectors={"github": gh(api, tokens={"": "t", "me": "t"})},
+               sleep=sleep) == 0
+    assert seen["client_id"] == "shipped-id" and "admin:public_key" in seen["scopes"] and "admin:org" not in seen["scopes"]
+    assert seen["sleep"] is sleep  # a cancelled job's sleep stops the polling
+    d = open_vault()
+    assert {"id": "me", "provider": "github", "protected": False} in d["accounts"]
+    assert d["credentials"]["github"] == {"me": SECRET} and SECRET not in capsys.readouterr().out
+
+
+def test_device_flow_for_an_org_asks_for_the_org_scopes(armed, tmp_path, monkeypatch):
+    seen = device_flow(monkeypatch, tmp_path)
+    api = FakeApi({"/orgs/acme/repos": []}, {"/user": {"login": "me"},
+                  "/user/memberships/orgs/acme": {"state": "active", "role": "admin"}})
+    assert cli("arm", "--github", "--org", "acme", answers=("y", "y", ""),
+               connectors={"github": gh(api, tokens={"org:acme": "t"})}) == 0
+    assert "admin:org,admin:org_hook" in seen["scopes"] and open_vault()["credentials"]["github"] == {"org:acme": SECRET}
+
+
+def test_device_flow_refuses_a_different_login_than_the_one_given(armed, tmp_path, monkeypatch, capsys):
+    device_flow(monkeypatch, tmp_path)
+    api = personal_api()
+    api.objs["/user"] = {"login": "someone-else"}
+    assert cli("arm", "--github", "me", answers=("y",), connectors={"github": gh(api)}) == 1
+    assert "someone-else" in capsys.readouterr().err and "github" not in open_vault()["credentials"]
+
+
+def test_with_no_builtin_id_a_token_file_is_still_needed(armed, monkeypatch, capsys):
+    monkeypatch.delenv("PANIC_OAUTH_CLIENTS", raising=False)
+    monkeypatch.setattr(oauth, "github_device_token", lambda *a, **k: pytest.fail("device flow"))
+    assert cli("arm", "--github", "me", answers=("y",)) == 1
+    assert cli("arm", "--github", answers=("y",)) == 1
+    assert capsys.readouterr().err.count("--github needs --token-file FILE.") == 2

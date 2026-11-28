@@ -4,7 +4,7 @@ from fake import FakeConnector
 
 from panic import vault
 import test_cli
-from test_cli import PW, _steps, armed, bare, cli, open_vault  # noqa: F401
+from test_cli import PW, _steps, armed, bare, builtin_clients, cli, open_vault  # noqa: F401
 
 SECRET = "SECRET-VALUE-123"
 
@@ -163,3 +163,25 @@ def test_a_refreshed_token_is_saved_to_the_vault(bare, monkeypatch):
         assert main(["--vault", str(test_cli.vpath), "--keyfile", str(test_cli.kpath), "rehearse"]) == 0
     assert seen == ["Bearer T"]
     assert open_vault()["credentials"]["microsoft_personal"]["me@outlook.com"]["cache"] == "rotated"
+
+
+def test_personal_arm_with_no_address_or_client_id_uses_the_builtin_id_and_the_signed_in_address(bare, monkeypatch):
+    builtin_clients(monkeypatch, bare, microsoft="shipped-id")
+    calls = []
+
+    def authorize(client_id, login_hint=None):
+        calls.append((client_id, login_hint))
+        return {"client_id": client_id, "cache": "c1", "username": "Me@Outlook.com"}
+
+    rc = cli("arm", "--microsoft-personal", answers=["y", "y"], ms_authorize=authorize,
+             connectors={"microsoft_personal": FakeConnector(provider="microsoft_personal")})
+    d = open_vault()
+    assert rc == 0 and calls == [("shipped-id", None)]
+    assert d["accounts"] == [{"id": "me@outlook.com", "provider": "microsoft_personal", "protected": False}]
+    assert d["credentials"]["microsoft_personal"]["me@outlook.com"]["client_id"] == "shipped-id"
+
+
+def test_personal_arm_with_no_builtin_id_still_needs_the_client_id(bare, monkeypatch, capsys):
+    monkeypatch.delenv("PANIC_OAUTH_CLIENTS", raising=False)
+    rc = cli("arm", "--microsoft-personal", answers=["y"], ms_authorize=lambda *a, **k: pytest.fail("signed in"))
+    assert rc == 1 and "--client-id ID is required" in capsys.readouterr().err

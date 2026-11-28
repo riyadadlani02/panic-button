@@ -5,13 +5,16 @@ import sys
 import webbrowser
 from pathlib import Path
 
+from panic import oauth
 from panic.guided import grouped_services, load_services
+from panic.oauth import GITHUB_SCOPES
 from panic.session import CliError, _yes
 from panic.vault import VaultError
 
 DEFAULT_KEY = "~/panic.key"
 ENTRA = "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
-GITHUB_SCOPES = "repo,admin:public_key,admin:gpg_key,admin:ssh_signing_key,user,admin:repo_hook"
+# Services that sign in with an app the tool ships: (oauth_clients.json key, bare arm flag).
+ONE_CLICK = {"gmail": ("google", "--personal"), "outlook": ("microsoft", "--microsoft-personal"), "github": ("github", "--github")}
 
 # (key, menu label, steps, pages to open, fixed arm arguments, questions as (arm flag, prompt, kind))
 SERVICES = [
@@ -83,6 +86,9 @@ def collect(key: str, opener) -> list[str]:
     """Explain one service, then ask its questions. Returns the arguments for `panic arm`."""
     _, label, steps, pages, fixed, questions = next(s for s in SERVICES if s[0] == key)
     print(f"\n{label}")
+    if key in ONE_CLICK and oauth.builtin(ONE_CLICK[key][0]):
+        print("  Your browser will open. Sign in and click Allow.")
+        return [ONE_CLICK[key][1]]
     for i, step in enumerate(steps, 1):
         print(f"  {i}. {step}")
     if pages:

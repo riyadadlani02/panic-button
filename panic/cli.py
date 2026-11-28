@@ -268,8 +268,10 @@ def _parser() -> argparse.ArgumentParser:
 
     add("setup", lambda a: cli_setup.run(a, p), "Guided setup: explains each service, asks what it needs, then arms it.")
     arm = add("arm", cmd_arm, "Add an account (or a Workspace domain) and record its baseline.")
-    arm.add_argument("--personal", metavar="EMAIL")
-    arm.add_argument("--microsoft-personal", metavar="EMAIL", help="arm your own Outlook.com or Hotmail account")
+    arm.add_argument("--personal", metavar="EMAIL", nargs="?", const="",
+                     help="arm your own Gmail account (no EMAIL: the account you sign in with)")
+    arm.add_argument("--microsoft-personal", metavar="EMAIL", nargs="?", const="",
+                     help="arm your own Outlook.com or Hotmail account (no EMAIL: the account you sign in with)")
     arm.add_argument("--client-secrets", metavar="FILE", help="your Google OAuth desktop client file")
     arm.add_argument("--reconnect", action="store_true", help="re-authorise an armed account only")
     arm.add_argument("--workspace", action="store_true")
@@ -283,7 +285,8 @@ def _parser() -> argparse.ArgumentParser:
     arm.add_argument("--microsoft-tenant", metavar="TENANT", help="arm a Microsoft 365 tenant")
     arm.add_argument("--client-id", metavar="ID", help="Microsoft app registration (client) id")
     arm.add_argument("--client-secret-file", metavar="FILE", help="file holding the app's client secret")
-    arm.add_argument("--github", metavar="LOGIN", help="your GitHub login (with --org, the organisation admin's login)")
+    arm.add_argument("--github", metavar="LOGIN", nargs="?", const="",
+                     help="your GitHub login (with --org, the organisation admin's login; none: the account you sign in with)")
     arm.add_argument("--token-file", metavar="FILE", help="file holding the GitHub or Slack token")
     arm.add_argument("--slack", action="store_true", help="arm a Slack workspace (you are its primary owner)")
     arm.add_argument("--org", metavar="NAME", help="arm this GitHub organisation instead of the account")

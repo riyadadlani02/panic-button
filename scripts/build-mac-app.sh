@@ -26,6 +26,7 @@ uv run --group app pyinstaller --noconfirm --clean --windowed --log-level WARN \
   --name "panic button" --osx-bundle-identifier com.panicbutton.app ${ICON:+"$ICON"} \
   --add-data "$ROOT/panic/app/web:panic/app/web" \
   --add-data "$ROOT/panic/guided_services.json:panic" \
+  --add-data "$ROOT/panic/oauth_clients.json:panic" \
   --collect-submodules panic --collect-data googleapiclient \
   --hidden-import keyring.backends.macOS \
   --distpath "$ROOT/dist/app" --workpath "$WORK" --specpath "$WORK" \
