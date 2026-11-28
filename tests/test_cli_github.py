@@ -172,7 +172,6 @@ def test_device_flow_refuses_a_different_login_than_the_one_given(armed, tmp_pat
 
 
 def test_with_no_builtin_id_a_token_file_is_still_needed(armed, monkeypatch, capsys):
-    monkeypatch.delenv("PANIC_OAUTH_CLIENTS", raising=False)
     monkeypatch.setattr(oauth, "github_device_token", lambda *a, **k: pytest.fail("device flow"))
     assert cli("arm", "--github", "me", answers=("y",)) == 1
     assert cli("arm", "--github", answers=("y",)) == 1

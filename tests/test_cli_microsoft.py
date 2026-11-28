@@ -182,7 +182,6 @@ def test_personal_arm_with_no_address_or_client_id_uses_the_builtin_id_and_the_s
 
 
 def test_personal_arm_with_no_builtin_id_still_needs_the_client_id(bare, monkeypatch, capsys):
-    monkeypatch.delenv("PANIC_OAUTH_CLIENTS", raising=False)
     rc = cli("arm", "--microsoft-personal", answers=["y"], ms_authorize=lambda *a, **k: pytest.fail("signed in"))
     assert rc == 1 and "--client-id ID is required" in capsys.readouterr().err
 

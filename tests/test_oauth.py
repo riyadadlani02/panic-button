@@ -10,7 +10,7 @@ CODE = {"device_code": "dc", "user_code": "ABCD-1234", "verification_uri": "http
 
 
 def test_the_shipped_file_has_every_id_unset(monkeypatch):
-    monkeypatch.delenv("PANIC_OAUTH_CLIENTS", raising=False)
+    monkeypatch.delenv("PANIC_OAUTH_CLIENTS")
     assert [oauth.builtin(k) for k in ("google", "microsoft", "github")] == [None, None, None]
 
 

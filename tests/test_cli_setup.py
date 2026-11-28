@@ -85,7 +85,6 @@ def test_with_builtin_ids_the_sign_in_services_ask_nothing_and_open_no_pages(tmp
 
 
 def test_with_builtin_ids_unset_the_steps_and_questions_are_unchanged(tmp_path, monkeypatch):
-    monkeypatch.delenv("PANIC_OAUTH_CLIENTS", raising=False)
     client = tmp_path / "client.json"
     client.write_text("{}")
     opened = []

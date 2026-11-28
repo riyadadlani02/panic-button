@@ -392,7 +392,6 @@ def test_reconnect_with_no_address_reconnects_the_signed_in_account(armed):
 
 
 def test_arm_personal_with_no_builtin_client_still_needs_the_client_file(bare, monkeypatch, capsys):
-    monkeypatch.delenv("PANIC_OAUTH_CLIENTS", raising=False)
     calls = []
     assert cli("arm", "--personal", whoami=lambda t: "x@y.z", answers=["y"],
                authorize=lambda cfg, login_hint=None: calls.append(cfg)) == 1

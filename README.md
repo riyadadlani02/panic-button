@@ -234,19 +234,19 @@ The tool finds the plan itself and prints what it can do on it. If it cannot tel
 
 ## For the seller: built-in sign-in apps
 
-The one-click routes use sign-in apps that you register once and ship with the tool. Register these, then put the IDs in `panic/oauth_clients.json`.
+The one-click routes use sign-in apps that you register once and ship with the tool. Register these, then put the IDs in `~/.config/panic-button/oauth_clients.json` on the Mac you build on. That file stays out of git; `panic/oauth_clients.json` in the repo keeps every ID `null`, so a copy built from source uses the step-by-step setup.
 
 - **Google.** Create a Cloud project and enable the Gmail API. Put the consent screen in production. Create an OAuth client of type "Desktop app". Google may require app verification for the Gmail settings scopes.
 - **Microsoft.** Register an app that accepts any organisation and personal accounts. Turn on public client flows and add a "Mobile and desktop" redirect to `http://localhost`. Add the delegated permission `MailboxSettings.ReadWrite`. Publisher verification is recommended.
 - **GitHub.** Create an OAuth App and enable device flow. No secret is needed.
 
-In `panic/oauth_clients.json`:
+In that file (same shape as `panic/oauth_clients.json`):
 
 - `google`: the downloaded Desktop-app JSON object, as it is.
 - `microsoft`: the client ID, as a string.
 - `github`: the client ID, as a string.
 
-To test with another file, set `PANIC_OAUTH_CLIENTS=/path/to/file.json`. Rebuild the app afterwards with `scripts/build-mac-app.sh` so the IDs are bundled.
+`scripts/build-mac-app.sh` bundles that file into the app (or the file named by `PANIC_OAUTH_CLIENTS`, which also overrides the IDs when running from source). Without it the build warns and ships no IDs.
 
 ## Setup: any other service (guided)
 

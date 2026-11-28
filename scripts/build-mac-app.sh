@@ -21,12 +21,17 @@ if command -v sips >/dev/null && command -v iconutil >/dev/null; then
   ICON="--icon=$WORK/icon.icns"
 fi
 
+# Sign-in app IDs live outside git; without the file the app ships with none and setup uses the manual steps.
+CLIENTS=${PANIC_OAUTH_CLIENTS:-$HOME/.config/panic-button/oauth_clients.json}
+[ -f "$CLIENTS" ] || { echo "No sign-in app IDs at $CLIENTS; building without one-click sign-in." >&2; CLIENTS="$ROOT/panic/oauth_clients.json"; }
+cp "$CLIENTS" "$WORK/oauth_clients.json"
+
 uv sync --group app --quiet
 uv run --group app pyinstaller --noconfirm --clean --windowed --log-level WARN \
   --name "panic button" --osx-bundle-identifier com.panicbutton.app ${ICON:+"$ICON"} \
   --add-data "$ROOT/panic/app/web:panic/app/web" \
   --add-data "$ROOT/panic/guided_services.json:panic" \
-  --add-data "$ROOT/panic/oauth_clients.json:panic" \
+  --add-data "$WORK/oauth_clients.json:panic" \
   --collect-submodules panic --collect-data googleapiclient \
   --hidden-import keyring.backends.macOS \
   --distpath "$ROOT/dist/app" --workpath "$WORK" --specpath "$WORK" \
